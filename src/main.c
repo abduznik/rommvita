@@ -25,6 +25,7 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #include <psp2/camera.h>
 #include <psp2/appmgr.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/rtc.h>
 #include <ctype.h>
 #include <openssl/md5.h>
 #include "quirc/quirc.h"
@@ -1593,14 +1594,20 @@ static int sync_one(const Game *g, int kind, char *msg, size_t msgsz) {
     if (action == SY_PUSHED) {
         char noext[160], up[200];
         strip_ext(g->fs_name, noext, sizeof noext);
-        snprintf(up, sizeof up, "%s%s", noext, kind == K_STATE ? ".state" : ".srm");
+        // every push is a new version tagged with the local date and time: "Game [2026-09-20_19-49-15].srm"
+        SceDateTime now;
+        memset(&now, 0, sizeof now);
+        sceRtcGetCurrentClockLocalTime(&now);
+        snprintf(up, sizeof up, "%.150s [%04d-%02d-%02d_%02d-%02d-%02d]%s", noext,
+                 now.year, now.month, now.day, now.hour, now.minute, now.second,
+                 kind == K_STATE ? ".state" : ".srm");
         RemoteSave res;
-        if (push_file(kind, g->id, path, up, !conflict, &res, err, sizeof err) < 0) {
+        if (push_file(kind, g->id, path, up, 0, &res, err, sizeof err) < 0) {   // never overwrite: keep history
             snprintf(msg, msgsz, "%s", err);
             return SY_ERR;
         }
         rec_set(kind, g->id, md5, res.id, res.updated);
-        snprintf(msg, msgsz, conflict ? "Pushed %s (RomM had a newer one too)" : "Pushed %s to RomM", what);
+        snprintf(msg, msgsz, conflict ? "Pushed %s as a new version (RomM had a newer one too)" : "Pushed %s as a new version", what);
         return SY_PUSHED;
     }
     if (has_local || rs.found) rec_set(kind, g->id, has_local ? md5 : "-", rs.found ? rs.id : 0,
