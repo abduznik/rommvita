@@ -34,6 +34,8 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #include <curl/curl.h>
 
 #define DATA_DIR    "ux0:data/RomMVita"
+#define VITA_TAG       "rommvita"   // RomM slot / emulator value identifying uploads from this app (never in file names)
+#define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
 #define CONFIG_PATH DATA_DIR "/config.txt"
 
 // Freegosy palette (sampled from its icon): navy, dark navy, periwinkle, peach, salmon
@@ -1433,9 +1435,6 @@ static int remote_latest(int kind, int rom_id, RemoteSave *out, char *err, size_
     cJSON_Delete(root);
     return 0;
 }
-
-#define VITA_TAG       "rommvita"   // RomM slot / emulator value identifying uploads from this app (never in file names)
-#define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
 
 static int push_file(int kind, int rom_id, const char *path, const char *upname, int overwrite,
                      RemoteSave *out, char *err, size_t errsz) {
