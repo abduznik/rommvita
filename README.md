@@ -1,38 +1,107 @@
+<p align="center"><img src="assets/logo.png" width="160" alt="RomM Vita"></p>
+
 # RomM Vita
 
-A [RomM](https://github.com/rommapp/romm) client for the PlayStation Vita (VitaSDK homebrew).
+A [RomM](https://github.com/rommapp/romm) client for the PlayStation Vita. Browse your library, download games,
+launch them in RetroArch and keep saves and states in sync with your RomM server.
 
-**Status: MVP - connection only.** The app pairs with a RomM server and verifies the
-connection. ROM browsing/downloading and RetroArch launching are planned.
+> **Supported systems: SNES only (for now).** Other platforms are planned.
 
 ## Features
-- Server URL entry with **automatic http/https detection** (probes `/api/heartbeat`, follows redirects)
-- Pairing with RomM **client API tokens**: type the code (`XXXX-XXXX`) or **scan the QR** with the Vita camera
-- Verifies the token (`GET /api/users/me`) and shows a green/red status indicator
-- Saves the server + token to `ux0:data/RomMVita/config.txt` and re-verifies on launch
+- Pair with a RomM server by typing the **pairing code** (`XXXX-XXXX`) or **scanning the QR** with the Vita camera
+- Server URL with **automatic http/https detection**
+- **SNES library** (names only, no covers yet) with instant local search and an "installed only" view
+- The library is **cached** on the Vita and refreshed in the background, so it opens instantly
+- Downloads ROMs and **launches them in RetroArch** from the app
+- **Save and state sync** with RomM, with core-compatibility checks for states
 
-## Usage
-1. In the RomM web UI create a Client API Token and generate its pairing code / QR.
-2. Open RomM Vita, enter the server address (scheme optional) and the code, or choose **Scan QR**.
-3. Select **Connect**. Green = connected.
+## Requirements
+- A hacked PS Vita (HENkaku / Enso) with [VitaShell](https://github.com/TheOfficialFloW/VitaShell) installed
+- **RetroArch for Vita**, installed separately (see below)
+- A RomM server (v5.0.0 or newer tested) reachable from the Vita over Wi-Fi - use the server's **LAN address**,
+  the Vita can't use Tailscale/VPN addresses
+- A RomM **Client API Token** (see below)
 
-Controls: D-pad select, Cross edit/confirm, Start exit. In the scanner: Triangle switches camera, Circle cancels.
+## Setup
 
-## Building
-Requires [VitaSDK](https://vitasdk.org/). Note: libcurl in VitaSDK links against OpenSSL 1.0.2
-(the package that conflicts with openssl-1.1.1 in vdpm), so install that one.
+### 1. Install RetroArch
+RomM Vita does not bundle an emulator; it launches the official RetroArch.
+1. Download [RetroArch.vpk (1.22.2)](https://buildbot.libretro.com/stable/1.22.2/playstation/vita/RetroArch.vpk) (about 520 MB).
+2. Copy it to the Vita and install it with VitaShell (see "Transferring files").
+3. **Open RetroArch once** and let it finish its first-run setup, then quit.
+
+### 2. Install RomM Vita
+1. Download `RomMVita-v0.2.0.vpk` from the [Releases](../../releases) page.
+2. Copy it to the Vita and install it with VitaShell. It is an *unsafe* homebrew app (it needs access to RetroArch's
+   folders), so VitaShell will ask you to confirm.
+
+### 3. Create a Client API Token in RomM
+1. In the RomM web UI open your profile and go to **Client API Tokens**, then create a token.
+   Make sure it includes the asset permissions (saves and states) and the usual read permissions.
+2. Use the token's **Pair** option to show a pairing code and QR.
+   Codes expire after 5 minutes and work once.
+
+### 4. Connect
+1. Open **RomM Vita**.
+2. Enter the server address. The scheme is optional: `192.168.1.10:8285` works, http/https is detected automatically.
+3. Enter the pairing code, or choose **Scan QR** and point the camera at the QR.
+4. Select **Connect**. The indicator turns **green** when connected, and the library opens.
+
+### Transferring files to the Vita
+- **FTP:** in VitaShell press **Select** to start the FTP server, then upload to `ux0:data/` with any FTP client.
+- **USB:** in VitaShell press **Start** and choose USB Connection.
+- Then in VitaShell open the `.vpk` and press Cross to install.
+
+## Using the library
+| Button | Action |
+|---|---|
+| D-pad / L / R | Move / page up and down |
+| Cross | Play (downloads first if needed) |
+| Square | Search (empty = show all) |
+| Select | Toggle "installed only" |
+| Triangle | Sync saves and states now |
+| Circle | Back to the connection screen |
+| Start | Exit |
+
+Opening RetroArch's own menu in a game: **L + R + Start + Select**. Quit RetroArch from its menu (Close Content or
+Quit) so it writes the save file, then open RomM Vita again to push it.
+
+## How saves and states sync
+- Before a game launches, the app pulls a newer save/state from RomM if there is one. The next time you open the app it
+  pushes anything you changed.
+- A pull first backs up your local file to `.bak`. If both sides changed, your Vita's copy is pushed and RomM keeps its
+  own as well - nothing is deleted.
+- **States only load in the core that made them.** The app checks each state's size against the cores it knows. If the
+  core isn't installed on the Vita you get an "Incompatible cores" popup and the state is not pulled. It learns each
+  core's state size from states made on the Vita.
+- Saves (`.srm`) work across cores.
+
+## Files on the Vita
+| Path | Contents |
+|---|---|
+| `ux0:data/RomMVita/config.txt` | Server address and saved token |
+| `ux0:data/RomMVita/roms/snes/` | Downloaded ROMs |
+| `ux0:data/RomMVita/library.cache` | Cached game list |
+| `ux0:data/RomMVita/sync.txt`, `cores.txt`, `lastlaunch.txt` | Sync bookkeeping |
+
+## Building from source
+Requires [VitaSDK](https://vitasdk.org/). libcurl in VitaSDK links against OpenSSL 1.0.2 (the package that conflicts with
+openssl-1.1.1 in vdpm), so install that one.
 
 ```sh
 mkdir build && cd build
 cmake .. && make
 ```
-Output: `build/rommvita.vpk`. Install with VitaShell.
+Output: `build/rommvita.vpk`. The app art is generated by `assets/make_art.py` (needs Inkscape and ImageMagick).
 
 ## Notes
-- TLS certificates are **not verified** (the Vita has no usable CA store); traffic is encrypted but the server is not authenticated. TLS is limited to 1.2.
-- QR decoding uses [quirc](https://github.com/dlbeer/quirc) (ISC license, in `src/quirc/`).
+- TLS certificates are **not verified** (the Vita has no usable CA store); traffic is encrypted but the server is not
+  authenticated. TLS is limited to 1.2.
+- Third-party code: [quirc](https://github.com/dlbeer/quirc) (ISC) and [cJSON](https://github.com/DaveGamble/cJSON) (MIT),
+  in `src/quirc/` and `src/cjson/`.
+- The RomM name and logo belong to the RomM project; this is an unofficial client.
 
 ## Roadmap
-- Browse platforms/ROMs, cover art
-- ROM downloads to per-platform folders
-- Launch games via a RetroArch wrapper
+- More platforms beyond SNES
+- Cover art
+- Per-platform folders and core selection
