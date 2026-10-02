@@ -10,7 +10,7 @@ SCREEN = "#d6d9ec"
 
 # Vita front view in its own coordinates: flat top, rounded belly, kept compact.
 BODY = "M -300 112 H 380 C 425 112 452 140 452 190 C 452 270 425 352 350 352 H -300 Z"
-SCALE, TX, TY = 1.4, -187.0, -87.0     # 
+SCALE, TX, TY = 1.35, -164.0, -81.0     # 
 
 def to_art(x, y):   # canvas point -> Vita coordinates (for the diagonal split)
     return (x - TX) / SCALE, (y - TY) / SCALE
@@ -27,7 +27,7 @@ def tile(size_px):
       <rect x="-300" y="-300" width="1200" height="1200" fill="{PURPLE}"/>
       <polygon points="{d1[0]:.1f},{d1[1]:.1f} {d2[0]:.1f},{d2[1]:.1f} {d3[0]:.1f},{d3[1]:.1f}" fill="{DARK}"/>
     </g>
-    <rect x="152" y="165" width="190" height="125" rx="14" fill="{SCREEN}"/>
+    <rect x="-300" y="142" width="642" height="168" rx="15" fill="{SCREEN}"/>
     <circle cx="395" cy="176" r="15" fill="{PEACH}"/><circle cx="368" cy="203" r="15" fill="{PEACH}"/>
     <circle cx="422" cy="203" r="15" fill="{SALMON}"/><circle cx="395" cy="230" r="15" fill="{SALMON}"/>
     <circle cx="395" cy="290" r="19" fill="{LAV2}"/>
