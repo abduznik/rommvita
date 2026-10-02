@@ -1419,7 +1419,7 @@ static int remote_latest(int kind, int rom_id, RemoteSave *out, char *err, size_
         }
         if (kind == K_STATE) {   // only trust states made by RetroArch (others are incompatible)
             cJSON *em = cJSON_GetObjectItem(it, "emulator");
-            if (!cJSON_IsString(em) || strcmp(em->valuestring, "retroarch")) continue;
+            if (!cJSON_IsString(em) || (strcmp(em->valuestring, "retroarch") && strcmp(em->valuestring, VITA_TAG))) continue;
         }
         const char *u = cJSON_IsString(up) ? up->valuestring : "";
         if (!out->found || strcmp(u, out->updated) > 0 ||
@@ -1434,18 +1434,18 @@ static int remote_latest(int kind, int rom_id, RemoteSave *out, char *err, size_
     return 0;
 }
 
-#define VITA_TAG       "rommvita"   // slot name and filename tag identifying uploads from this app
+#define VITA_TAG       "rommvita"   // RomM slot / emulator value identifying uploads from this app (never in file names)
 #define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
 
 static int push_file(int kind, int rom_id, const char *path, const char *upname, int overwrite,
                      RemoteSave *out, char *err, size_t errsz) {
     char url[300], auth[256];
     if (kind == K_STATE)
-        snprintf(url, sizeof url, "%s/api/states?rom_id=%d&emulator=retroarch", g_url, rom_id);
+        snprintf(url, sizeof url, "%s/api/states?rom_id=%d&emulator=" VITA_TAG, g_url, rom_id);
     else
         // our own slot, so the version cap below only ever prunes saves this app made
         snprintf(url, sizeof url,
-                 "%s/api/saves?rom_id=%d&overwrite=%s&slot=" VITA_TAG "&autocleanup=true&autocleanup_limit=%d",
+                 "%s/api/saves?rom_id=%d&overwrite=%s&slot=" VITA_TAG "&emulator=" VITA_TAG "&autocleanup=true&autocleanup_limit=%d",
                  g_url, rom_id, overwrite ? "true" : "false", KEEP_VERSIONS);
     CURL *c = curl_easy_init();
     if (!c) { snprintf(err, errsz, "curl init failed"); return -1; }
@@ -1509,7 +1509,7 @@ static int push_file(int kind, int rom_id, const char *path, const char *upname,
 enum { SY_NONE, SY_PUSHED, SY_PULLED, SY_ERR, SY_INCOMPAT };
 
 // RomM's state upload has no cleanup option, so keep only the newest KEEP_VERSIONS states
-// that carry our "(vita)" tag. States from other tools are never touched.
+// whose emulator field is our tag. States from other tools are never touched.
 static void prune_states(int rom_id) {
     char url[300], err[160] = "";
     snprintf(url, sizeof url, "%s/api/states?rom_id=%d", g_url, rom_id);
@@ -1525,9 +1525,9 @@ static void prune_states(int rom_id) {
     cJSON *it;
     cJSON_ArrayForEach(it, arr) {
         cJSON *id = cJSON_GetObjectItem(it, "id");
-        cJSON *fn = cJSON_GetObjectItem(it, "file_name");
+        cJSON *em = cJSON_GetObjectItem(it, "emulator");
         cJSON *up = cJSON_GetObjectItem(it, "updated_at");
-        if (!cJSON_IsNumber(id) || !cJSON_IsString(fn) || !strstr(fn->valuestring, "(vita)")) continue;
+        if (!cJSON_IsNumber(id) || !cJSON_IsString(em) || strcmp(em->valuestring, VITA_TAG)) continue;
         if (n >= 128) break;
         mine[n].id = id->valueint;
         snprintf(mine[n].updated, sizeof mine[n].updated, "%s", cJSON_IsString(up) ? up->valuestring : "");
@@ -1649,7 +1649,7 @@ static int sync_one(const Game *g, int kind, char *msg, size_t msgsz) {
         SceDateTime now;
         memset(&now, 0, sizeof now);
         sceRtcGetCurrentClockLocalTime(&now);
-        snprintf(up, sizeof up, "%.140s [%04d-%02d-%02d_%02d-%02d-%02d] (vita)%s", noext,
+        snprintf(up, sizeof up, "%.150s [%04d-%02d-%02d_%02d-%02d-%02d]%s", noext,
                  now.year, now.month, now.day, now.hour, now.minute, now.second,
                  kind == K_STATE ? ".state" : ".srm");
         RemoteSave res;
