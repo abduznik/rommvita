@@ -35,17 +35,17 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #define DATA_DIR    "ux0:data/RomMVita"
 #define CONFIG_PATH DATA_DIR "/config.txt"
 
-// Navy/slate palette (shared with Freegosy) with peach/salmon accents
-#define COL_BG     RGBA8(0x10, 0x1e, 0x33, 255)
-#define COL_PANEL  RGBA8(0x1b, 0x33, 0x50, 255)
-#define COL_SEL    RGBA8(0x3b, 0x62, 0x94, 255)
-#define COL_TEXT   RGBA8(0xe6, 0xe9, 0xf5, 255)
-#define COL_DIM    RGBA8(0x9a, 0xa1, 0xc4, 255)
-#define COL_ACCENT RGBA8(0xf1, 0xcf, 0xa6, 255)
-#define COL_GRAY   RGBA8(0x6d, 0x74, 0x94, 255)
+// Freegosy palette (sampled from its icon): navy, dark navy, periwinkle, peach, salmon
+#define COL_BG     RGBA8(0x14, 0x2b, 0x42, 255)
+#define COL_PANEL  RGBA8(0x24, 0x40, 0x60, 255)
+#define COL_SEL    RGBA8(0x5a, 0x67, 0x93, 255)
+#define COL_TEXT   RGBA8(0xf2, 0xf3, 0xf8, 255)
+#define COL_DIM    RGBA8(0x9d, 0xa4, 0xc6, 255)
+#define COL_ACCENT RGBA8(0xef, 0xc9, 0xa0, 255)
+#define COL_GRAY   RGBA8(0x4a, 0x57, 0x76, 255)
 #define COL_YELLOW RGBA8(0xf0, 0xc8, 0x5a, 255)
 #define COL_GREEN  RGBA8(0x4d, 0xd0, 0x8a, 255)
-#define COL_RED    RGBA8(0xf0, 0x6e, 0x6e, 255)
+#define COL_RED    RGBA8(0xed, 0x71, 0x6b, 255)
 
 typedef enum { ST_IDLE, ST_WORKING, ST_OK, ST_FAIL } Status;
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Generates the app art (icon0, LiveArea bg/startup, in-app logo).
 Needs inkscape + ImageMagick. A PS Vita drawn like the RomM logo (cropped silhouette, diagonal
-split, peach/salmon buttons) in the navy/slate palette shared with Freegosy."""
+split, peach/salmon buttons) in the exact navy/periwinkle palette of the Freegosy icon."""
 import subprocess, os
 
 OUT = os.path.dirname(os.path.abspath(__file__)) + "/.."
-LAV, LAV2, PURPLE, DARK, PEACH, SALMON = "#a9aed0", "#7c82a9", "#24405f", "#162b45", "#f1cfa6", "#eba08c"
-SCREEN = "#d6d9ec"
+LAV, LAV2, PURPLE, DARK, PEACH, SALMON = "#7981a8", "#7981a8", "#244060", "#142b42", "#efc9a0", "#eda186"
+SCREEN = "#7981a8"   # exact colours sampled from the Freegosy app icon
 
 # Vita front view in its own coordinates: flat top, rounded belly, kept compact.
-BODY = "M -300 112 H 380 C 425 112 452 140 452 190 C 452 270 425 352 350 352 H -300 Z"
+BODY = "M -300 104 H 318 C 346 104 352 128 380 128 C 428 128 452 152 452 198 C 452 272 425 352 350 352 H -300 Z"
 SCALE, TX, TY = 1.35, -164.0, -81.0     # 
 
 def to_art(x, y):   # canvas point -> Vita coordinates (for the diagonal split)
@@ -27,10 +27,14 @@ def tile(size_px):
       <rect x="-300" y="-300" width="1200" height="1200" fill="{PURPLE}"/>
       <polygon points="{d1[0]:.1f},{d1[1]:.1f} {d2[0]:.1f},{d2[1]:.1f} {d3[0]:.1f},{d3[1]:.1f}" fill="{DARK}"/>
     </g>
-    <rect x="-300" y="142" width="642" height="168" rx="15" fill="{SCREEN}"/>
-    <circle cx="395" cy="176" r="15" fill="{PEACH}"/><circle cx="368" cy="203" r="15" fill="{PEACH}"/>
-    <circle cx="422" cy="203" r="15" fill="{SALMON}"/><circle cx="395" cy="230" r="15" fill="{SALMON}"/>
-    <circle cx="395" cy="290" r="19" fill="{LAV2}"/>
+    <rect x="-300" y="124" width="610" height="204" rx="15" fill="{SCREEN}"/>
+    <!-- face buttons: diamond -->
+    <circle cx="378" cy="177" r="13.5" fill="{PEACH}"/><circle cx="354" cy="201" r="13.5" fill="{PEACH}"/>
+    <circle cx="402" cy="201" r="13.5" fill="{SALMON}"/><circle cx="378" cy="225" r="13.5" fill="{SALMON}"/>
+    <!-- analog stick with ring -->
+    <circle cx="373" cy="278" r="28" fill="{LAV2}"/>
+    <circle cx="373" cy="278" r="22.5" fill="{DARK}"/>
+    <circle cx="373" cy="278" r="15" fill="{LAV2}"/>
   </g>'''
 
 def svg_for(w, h):
