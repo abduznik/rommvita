@@ -51,7 +51,6 @@ RomM Vita is a solo passion project, built and maintained in my spare time. If i
 contribution helps keep it going. There is no pressure at all: the app is and will always be free.
 
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github&labelColor=142b42)](https://github.com/sponsors/abduznik)
-[![Ko-fi](https://img.shields.io/badge/Support-Ko--fi-eda186?logo=ko-fi&logoColor=white&labelColor=142b42)](https://ko-fi.com/abduznik)
 
 ## Requirements
 - A hacked PS Vita (HENkaku / Enso) with [VitaShell](https://github.com/TheOfficialFloW/VitaShell) installed
