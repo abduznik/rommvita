@@ -13,7 +13,7 @@ include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "RomM Vita")
 set(VITA_TITLEID  "ROMM00001")
-set(VITA_VERSION  "00.20")
+set(VITA_VERSION  "00.30")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -O2 -std=gnu11")
 

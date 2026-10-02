@@ -27,7 +27,7 @@ files and save states in sync with RomM across devices.
 
 | | Status |
 |---|---|
-| **Systems** | **SNES** (Super Nintendo) via the Snes9x cores in RetroArch. More systems are planned. |
+| **Systems** | **SNES** via the Snes9x cores and **Game Boy Advance** (experimental) via gpSP, both in RetroArch. More systems are planned. |
 | **Console** | PlayStation Vita and PlayStation TV with custom firmware (HENkaku / Enso) |
 | **Emulator** | RetroArch for Vita 1.22.2 (installed separately) |
 | **Server** | RomM 5.0.0 or newer |
@@ -37,7 +37,9 @@ files and save states in sync with RomM across devices.
 ## Features
 - **Easy pairing:** enter the 8-character code (`XXXX-XXXX`) or scan the QR with the Vita camera. The server address
   accepts http and https, detected automatically.
-- **Fast library:** your SNES games with instant search and an "installed only" view. The list is cached on the Vita and
+- **Platform manager:** pick which system to open after connecting.
+- **Offline mode:** no connection? Open your downloaded games anyway, with a list of saves and states waiting to sync.
+- **Fast library:** each platform has instant search and an "installed only" view. The list is cached on the Vita and
   refreshed in the background, so it opens immediately.
 - **One-button play:** downloads the ROM, then launches it in RetroArch with a compatible core.
 - **Save and state sync:** pulls the newest save before you play and pushes your progress afterwards. Local files are
@@ -93,11 +95,11 @@ RomM Vita does not bundle an emulator; it launches the official RetroArch.
 | Button | Action |
 |---|---|
 | D-pad / L / R | Move / page up and down |
-| Cross | Play (downloads first if needed) |
+| Cross | Play (downloads first if needed). Offline: launch a downloaded game |
 | Square | Search (empty = show all) |
 | Select | Toggle "installed only" |
 | Triangle | Sync saves and states now |
-| Circle | Back to the connection screen |
+| Circle | Back to the platform list |
 | Start | Exit |
 
 Opening RetroArch's own menu in a game: **L + R + Start + Select**. Quit RetroArch from its menu (Close Content or
@@ -117,8 +119,8 @@ Quit) so it writes the save file, then open RomM Vita again to push it.
 | Path | Contents |
 |---|---|
 | `ux0:data/RomMVita/config.txt` | Server address and saved token |
-| `ux0:data/RomMVita/roms/snes/` | Downloaded ROMs |
-| `ux0:data/RomMVita/library.cache` | Cached game list |
+| `ux0:data/RomMVita/roms/<system>/` | Downloaded ROMs, one folder per system (`snes`, `gba`) |
+| `ux0:data/RomMVita/library_<system>.cache` | Cached game list per system |
 | `ux0:data/RomMVita/sync.txt`, `cores.txt`, `lastlaunch.txt` | Sync bookkeeping |
 
 ## Building from source

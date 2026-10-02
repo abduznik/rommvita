@@ -1,6 +1,15 @@
 # Changelog
 
-Supported systems: **SNES only** for now.
+Supported systems: **SNES** and **Game Boy Advance (experimental)**. More are planned.
+
+## Unreleased (branch `gba-support`)
+- **Platform manager:** after connecting you choose a platform. Only the systems we plan to support are listed;
+  SNES and Game Boy Advance work, the rest are marked "Planned".
+- **Game Boy Advance (experimental):** library, downloads and RetroArch launch with gpSP (falls back to mGBA, then
+  VBA Next), with save and save-state sync. Tracked in issue #2; it stays open until tested end-to-end.
+- **Offline mode:** if the server cannot be reached, open the downloaded games without logging in again. A panel lists
+  saves and states that changed on the Vita and will sync when you are back online.
+- Library caches are now kept per platform.
 
 ## v0.2.0
 - New navy/slate theme (same palette as Freegosy) with a half-cropped Vita logo in the app, LiveArea icon, background and startup image

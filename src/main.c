@@ -56,6 +56,7 @@ static char g_user[64]   = "";
 
 static volatile Status g_status = ST_IDLE;
 static volatile int g_enter_library = 0;
+static volatile int g_net_fail = 0;           // server unreachable: offer offline mode
 static char g_msg[256] = "Not connected";
 static SceCtrlData g_pad, g_old;
 
@@ -332,7 +333,8 @@ static int connect_thread(SceSize args, void *argp) {
     char base[300], err[200] = "";
 
     if (!probe_base(g_url, base, sizeof base, err, sizeof err)) {
-        set_status(ST_FAIL, "%s", err);
+        set_status(ST_FAIL, "%s  -  you can use Offline mode", err);
+        g_net_fail = 1;
         return sceKernelExitDeleteThread(0);
     }
 
@@ -639,8 +641,7 @@ static int pressed(unsigned btn) { return (g_pad.buttons & btn) && !(g_old.butto
 
 #define MAX_GAMES 5000
 #define PAGE_SIZE 100
-#define ROM_DIR   DATA_DIR "/roms/snes"
-#define LIB_ROWS  11
+#define ROM_DIR   g_rom_dir
 
 typedef struct {
     int      id;
@@ -649,6 +650,42 @@ typedef struct {
     char     name[96];
     char     fs_name[128];
 } Game;
+
+// ---- platforms (only the systems we plan to support; `impl` marks the working ones)
+typedef struct {
+    const char *name, *dir, *slug;   // display name, local folder, RomM slug (NULL = not confirmed yet)
+    int impl;                        // 1 = launch and sync implemented
+    const char *cores[6];            // RetroArch cores in preference order
+    int id, count;                   // RomM platform id and rom_count (-1 = unknown)
+} Platform;
+
+static Platform g_plats[] = {
+    { "Super Nintendo",            "snes",    "snes", 1, { "snes9x2010_libretro", "snes9x2005_plus_libretro",
+                                                           "snes9x2005_libretro", "snes9x2002_libretro", "snes9x_libretro" }, -1, -1 },
+    { "Game Boy Advance",          "gba",     "gba",  1, { "gpsp_libretro", "mgba_libretro", "vba_next_libretro" }, -1, -1 },
+    { "NES",                       "nes",     NULL,   0, { 0 }, -1, -1 },
+    { "Game Boy",                  "gb",      NULL,   0, { 0 }, -1, -1 },
+    { "Game Boy Color",            "gbc",     NULL,   0, { 0 }, -1, -1 },
+    { "Sega Genesis / Mega Drive", "genesis", NULL,   0, { 0 }, -1, -1 },
+    { "PlayStation",               "ps1",     NULL,   0, { 0 }, -1, -1 },
+    { "Arcade",                    "arcade",  NULL,   0, { 0 }, -1, -1 },
+    { "Neo Geo",                   "neogeo",  NULL,   0, { 0 }, -1, -1 },
+    { "Sega Master System",        "sms",     NULL,   0, { 0 }, -1, -1 },
+    { "TurboGrafx-16 / PC Engine", "pce",     NULL,   0, { 0 }, -1, -1 },
+};
+#define NPLATS ((int)(sizeof g_plats / sizeof g_plats[0]))
+static Platform *g_plat = &g_plats[0];
+static char g_rom_dir[96] = DATA_DIR "/roms/snes";
+static char g_cache_path[128] = DATA_DIR "/library_snes.cache";
+
+static int g_offline = 0;                           // offline mode: cached list + downloaded games only
+static int lib_rows(void) { return g_offline ? 7 : 11; }
+
+// local saves/states changed since the last sync, waiting for a connection
+typedef struct { char name[64]; char what[28]; } Pending;
+static Pending g_pend[64];
+static volatile int g_npend = 0;
+static void pending_scan(void);
 
 static Game *g_games;
 static volatile int g_game_count = 0;
@@ -660,7 +697,6 @@ static char g_lib_msg[160] = "";
 static char g_lib_toast_pending[200] = "";
 static int  g_view_dirty;               // defined with the view below
 static void ensure_dirs(void);
-static int  g_platform_id = -1;
 static char g_search[64] = "";
 static int  g_cursor = 0, g_scroll = 0;
 
@@ -685,7 +721,7 @@ static void sanitize_filename(const char *in, char *out, size_t outsz) {
 static void local_rom_path(const Game *g, char *out, size_t outsz) {
     char fn[160];
     sanitize_filename(g->fs_name, fn, sizeof fn);
-    snprintf(out, outsz, ROM_DIR "/%s", fn);
+    snprintf(out, outsz, "%s/%s", g_rom_dir, fn);
 }
 
 static int file_exists(const char *path) {
@@ -693,30 +729,34 @@ static int file_exists(const char *path) {
     return sceIoGetstat(path, &st) >= 0;
 }
 
-static int find_snes_platform(char *err, size_t errsz) {
+// Fills id / rom_count for every platform we know a slug for. Returns 0 on success.
+static int platforms_refresh(char *err, size_t errsz) {
     char url[320];
     snprintf(url, sizeof url, "%s/api/platforms", g_url);
     Buf b = { .cap = 4 * 1024 * 1024 };
     long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, errsz);
-    int id = -1;
+    int rc = -1;
     if (code == 200) {
         cJSON *arr = cJSON_Parse(b.data);
         cJSON *p;
         cJSON_ArrayForEach(p, arr) {
             cJSON *slug = cJSON_GetObjectItem(p, "slug");
             cJSON *pid = cJSON_GetObjectItem(p, "id");
-            if (cJSON_IsString(slug) && !strcmp(slug->valuestring, "snes") && cJSON_IsNumber(pid)) {
-                id = pid->valueint;
-                break;
-            }
+            cJSON *cnt = cJSON_GetObjectItem(p, "rom_count");
+            if (!cJSON_IsString(slug) || !cJSON_IsNumber(pid)) continue;
+            for (int i = 0; i < NPLATS; i++)
+                if (g_plats[i].slug && !strcmp(g_plats[i].slug, slug->valuestring)) {
+                    g_plats[i].id = pid->valueint;
+                    g_plats[i].count = cJSON_IsNumber(cnt) ? cnt->valueint : -1;
+                }
         }
         cJSON_Delete(arr);
-        if (id < 0) snprintf(err, errsz, "No SNES platform found in RomM");
+        rc = 0;
     } else if (code > 0) {
         snprintf(err, errsz, "Platforms request failed (HTTP %ld)", code);
     }
     free(b.data);
-    return id;
+    return rc;
 }
 
 // ---- installed index: one directory scan instead of a stat per game
@@ -747,6 +787,14 @@ static void scan_installed(void) {
     g_inst_n = n;
 }
 
+static int inst_index(const Game *g) {
+    if (!g_inst || !g_inst_n) return -1;
+    char fn[160];
+    sanitize_filename(g->fs_name, fn, sizeof fn);
+    char *p = bsearch(fn, g_inst, g_inst_n, sizeof *g_inst, cmp_name);
+    return p ? (int)((p - (char *)g_inst) / (long)sizeof *g_inst) : -1;
+}
+
 static int is_installed(const Game *g) {
     if (!g_inst || !g_inst_n) return 0;
     char fn[160];
@@ -756,22 +804,23 @@ static int is_installed(const Game *g) {
 
 // ---- library cache: the list opens instantly, a background refresh updates it
 
-#define CACHE_PATH DATA_DIR "/library.cache"
 static Game *g_stage;
 static volatile int g_from_cache = 0;
+static volatile int g_lib_cancel = 0;           // set when the user leaves the library mid-load
 static volatile int g_follow = 0;               // keep cursor on the same game after a swap
 static unsigned long long g_last_refresh = 0;   // microseconds (process time)
 
 static void clean_field(char *s) { for (; *s; s++) if (*s == '\t' || *s == '\n' || *s == '\r') *s = ' '; }
 
 static int cache_load(void) {
-    FILE *f = fopen(CACHE_PATH, "r");
+    FILE *f = fopen(g_cache_path, "r");
+    if (!f && !strcmp(g_plat->dir, "snes")) f = fopen(DATA_DIR "/library.cache", "r");   // pre-0.3 name
     if (!f) return 0;
     char line[512], url[256];
     int pid = -1, n = 0;
     if (!fgets(line, sizeof line, f) || sscanf(line, "RV1\t%255[^\t]\t%d", url, &pid) != 2 ||
         strcmp(url, g_url) || pid < 0) { fclose(f); return 0; }
-    g_platform_id = pid;
+    g_plat->id = pid;
     while (n < MAX_GAMES && fgets(line, sizeof line, f)) {
         Game *g = &g_games[n];
         memset(g, 0, sizeof *g);
@@ -789,10 +838,10 @@ static int cache_load(void) {
 static void cache_save(const Game *list, int n) {
     ensure_dirs();
     char tmp[128];
-    snprintf(tmp, sizeof tmp, "%s.tmp", CACHE_PATH);
+    snprintf(tmp, sizeof tmp, "%s.tmp", g_cache_path);
     FILE *f = fopen(tmp, "w");
     if (!f) return;
-    fprintf(f, "RV1\t%s\t%d\n", g_url, g_platform_id);
+    fprintf(f, "RV1\t%s\t%d\n", g_url, g_plat->id);
     for (int i = 0; i < n; i++) {
         char a[128], b[96];
         snprintf(a, sizeof a, "%s", list[i].fs_name); clean_field(a);
@@ -801,7 +850,7 @@ static void cache_save(const Game *list, int n) {
     }
     int bad = fflush(f);
     fclose(f);
-    if (!bad) { sceIoRemove(CACHE_PATH); sceIoRename(tmp, CACHE_PATH); }
+    if (!bad) { sceIoRemove(g_cache_path); sceIoRename(tmp, g_cache_path); }
     else sceIoRemove(tmp);
 }
 
@@ -812,27 +861,57 @@ static int library_thread(SceSize args, void *argp) {
     snprintf(g_lib_msg, sizeof g_lib_msg, "Loading...");
 
     scan_installed();
+
+    if (g_offline) {
+        // no network: cached list plus whatever is downloaded on the card
+        int n = cache_load();
+        if (n > 0) { g_game_count = n; g_from_cache = 1; }
+        static unsigned char matched[MAX_INSTALLED];
+        memset(matched, 0, sizeof matched);
+        for (int i = 0; i < g_game_count; i++) { int ix = inst_index(&g_games[i]); if (ix >= 0) matched[ix] = 1; }
+        for (int i = 0; i < g_inst_n && g_game_count < MAX_GAMES; i++) {
+            if (matched[i]) continue;
+            Game *g = &g_games[g_game_count];
+            memset(g, 0, sizeof *g);
+            g->id = -1;
+            snprintf(g->fs_name, sizeof g->fs_name, "%s", g_inst[i]);
+            snprintf(g->name, sizeof g->name, "%s", g_inst[i]);
+            char *dot = strrchr(g->name, '.');
+            if (dot && strlen(dot) <= 5) *dot = 0;
+            g->installed = 1;
+            g_game_count++;
+        }
+        g_game_total = g_game_count;
+        pending_scan();
+        g_view_dirty = 1;
+        g_lib_msg[0] = 0;
+        g_lib_state = 2;
+        goto done;
+    }
+
     int had_cache = g_game_count > 0;
     if (!had_cache) {
         int n = cache_load();
         if (n > 0) { g_game_count = n; g_game_total = n; g_from_cache = 1; g_view_dirty = 1; had_cache = 1; }
     }
 
-    if (g_platform_id < 0) g_platform_id = find_snes_platform(err, sizeof err);
-    if (g_platform_id < 0) {
-        snprintf(g_lib_msg, sizeof g_lib_msg, "%s", had_cache ? "Offline - showing cached list"
-                                                              : (err[0] ? err : "Could not find SNES platform"));
+    if (g_plat->id < 0) platforms_refresh(err, sizeof err);
+    if (g_plat->id < 0) {
+        char m[160];
+        snprintf(m, sizeof m, "%s", err[0] ? err : "No such platform in your RomM");
+        if (!err[0]) snprintf(m, sizeof m, "No %s platform found in RomM", g_plat->name);
+        snprintf(g_lib_msg, sizeof g_lib_msg, "%s", had_cache ? "Offline - showing cached list" : m);
         g_lib_state = had_cache ? 2 : 3;
         goto done;
     }
 
     Game *dst = had_cache ? g_stage : g_games;   // refresh behind the visible list if we have one
     int direct = !had_cache, count = 0, offset = 0, total = 1, failed = 0;
-    while (offset < total && count < MAX_GAMES) {
+    while (offset < total && count < MAX_GAMES && !g_lib_cancel) {
         char url[512];
         snprintf(url, sizeof url,
                  "%s/api/roms?platform_ids=%d&limit=%d&offset=%d&order_by=name&order_dir=asc",
-                 g_url, g_platform_id, PAGE_SIZE, offset);
+                 g_url, g_plat->id, PAGE_SIZE, offset);
         Buf b = { .cap = 16 * 1024 * 1024 };
         long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, sizeof err);
         if (code != 200) {
@@ -876,7 +955,9 @@ static int library_thread(SceSize args, void *argp) {
         offset += PAGE_SIZE;
     }
 
-    if (failed) {
+    if (g_lib_cancel) {
+        g_lib_state = 0;                              // user left; discard
+    } else if (failed) {
         g_lib_state = had_cache ? 2 : 3;              // keep showing what we have
         if (had_cache) snprintf(g_lib_toast_pending, sizeof g_lib_toast_pending, "Refresh failed: %s", g_lib_msg);
     } else {
@@ -892,7 +973,7 @@ static int library_thread(SceSize args, void *argp) {
         }
         cache_save(g_games, g_game_count);
         g_lib_msg[0] = 0;
-        if (g_game_count == 0) snprintf(g_lib_msg, sizeof g_lib_msg, "No SNES games found");
+        if (g_game_count == 0) snprintf(g_lib_msg, sizeof g_lib_msg, "No %s games found", g_plat->name);
         g_lib_state = 2;
     }
 done:
@@ -907,6 +988,7 @@ static void library_load(void) {
     if (!g_games || !g_stage) { g_lib_state = 3; snprintf(g_lib_msg, sizeof g_lib_msg, "Out of memory"); return; }
     if (g_lib_busy) return;
     g_lib_busy = 1;
+    g_lib_cancel = 0;
     g_lib_state = 1;
     SceUID t = sceKernelCreateThread("library", library_thread, 0x40, 0x40000, 0, 0, NULL);
     if (t >= 0) sceKernelStartThread(t, 0, NULL);
@@ -1184,19 +1266,15 @@ static void strip_ext(const char *name, char *out, size_t sz) {
     if (dot && strlen(dot) <= 6) *dot = 0;
 }
 
-// SNES cores in preference order; the first one RetroArch has installed wins.
+// The platform's cores in preference order; the first one RetroArch has installed wins.
 // If RetroArch's folder can't be read (sandbox) we fall back to the first.
 static const char *pick_core(void) {
-    static const char *cores[] = {
-        "snes9x2010_libretro", "snes9x2005_plus_libretro",
-        "snes9x2005_libretro", "snes9x2002_libretro", "snes9x_libretro",
-    };
     char probe[128];
-    for (unsigned i = 0; i < sizeof cores / sizeof *cores; i++) {
-        snprintf(probe, sizeof probe, "ux0:app/RETROVITA/%s.self", cores[i]);
-        if (file_exists(probe)) return cores[i];
+    for (int i = 0; i < 6 && g_plat->cores[i]; i++) {
+        snprintf(probe, sizeof probe, "ux0:app/RETROVITA/%s.self", g_plat->cores[i]);
+        if (file_exists(probe)) return g_plat->cores[i];
     }
-    return cores[0];
+    return g_plat->cores[0] ? g_plat->cores[0] : "snes9x2010_libretro";
 }
 
 // Folder name RetroArch uses when saves are sorted by core: the core's library name.
@@ -1207,10 +1285,44 @@ static void core_sort_dir(const char *core, char *out, size_t sz) {
         { "snes9x2005_libretro",      "Snes9x 2005" },
         { "snes9x2002_libretro",      "Snes9x 2002" },
         { "snes9x_libretro",          "Snes9x" },
+        { "gpsp_libretro",            "gpSP" },
+        { "mgba_libretro",            "mGBA" },
+        { "vba_next_libretro",        "VBA Next" },
     };
     for (unsigned i = 0; i < sizeof map / sizeof *map; i++)
         if (!strcmp(core, map[i].core)) { snprintf(out, sz, "%s", map[i].dir); return; }
     snprintf(out, sz, "%s", core);
+}
+
+// Lowercase letters and digits only, so "Snes9x 2010", "snes9x2010_libretro" and "VBA Next" compare sensibly.
+static void norm_key(const char *in, char *out, size_t sz) {
+    size_t n = 0;
+    for (; *in && n + 1 < sz; in++)
+        if (isalnum((unsigned char)*in)) out[n++] = (char)tolower((unsigned char)*in);
+    out[n] = 0;
+    char *u = strstr(out, "libretro");
+    if (u && u != out) *u = 0;
+}
+
+// Looks for the sorted-by-core subfolder RetroArch made for this core. Returns 1 if found.
+static int find_core_subdir(const char *dir, const char *core, char *out, size_t sz) {
+    char want[64];
+    norm_key(core, want, sizeof want);
+    SceUID d = sceIoDopen(dir);
+    if (d < 0) return 0;
+    int found = 0;
+    SceIoDirent e;
+    memset(&e, 0, sizeof e);
+    while (!found && sceIoDread(d, &e) > 0) {
+        char have[64];
+        if (SCE_S_ISDIR(e.d_stat.st_mode)) {
+            norm_key(e.d_name, have, sizeof have);
+            if (!strcmp(have, want)) { snprintf(out, sz, "%s", e.d_name); found = 1; }
+        }
+        memset(&e, 0, sizeof e);
+    }
+    sceIoDclose(d);
+    return found;
 }
 
 // Finds the local .srm / .state for a game. Returns 1 if it exists; out always
@@ -1255,7 +1367,8 @@ static int local_file_path(const Game *g, int kind, char *out, size_t outsz) {
     }
     if (sorted) {
         char sub[64];
-        core_sort_dir(pick_core(), sub, sizeof sub);
+        const char *core = pick_core();
+        if (!find_core_subdir(dirs[0], core, sub, sizeof sub)) core_sort_dir(core, sub, sizeof sub);
         snprintf(out, outsz, "%s/%s/%s%s", dirs[0], sub, base, ext);
     } else {
         snprintf(out, outsz, "%s/%s%s", dirs[0], base, ext);
@@ -1498,6 +1611,7 @@ static int sync_one(const Game *g, int kind, char *msg, size_t msgsz) {
 
 // Syncs both the battery save (.srm) and the save state (.state) of a game.
 static int sync_game(const Game *g, char *msg, size_t msgsz, int *npush, int *npull) {
+    if (g->id < 0) { snprintf(msg, msgsz, "not in RomM"); return SY_NONE; }
     char m1[160] = "", m2[160] = "";
     int r1 = sync_one(g, K_SAVE, m1, sizeof m1);
     int r2 = sync_one(g, K_STATE, m2, sizeof m2);
@@ -1508,6 +1622,30 @@ static int sync_game(const Game *g, char *msg, size_t msgsz, int *npush, int *np
     else                   snprintf(msg, msgsz, "%s; %s", m1, m2);
     return (r1 == SY_ERR || r2 == SY_ERR) ? SY_ERR
          : ((r1 != SY_NONE && r1 != SY_INCOMPAT) || (r2 != SY_NONE && r2 != SY_INCOMPAT)) ? SY_PUSHED : SY_NONE;
+}
+
+// Lists games whose local save or state differs from what was last synced.
+static void pending_scan(void) {
+    int n = 0;
+    for (int i = 0; i < g_game_count && n < 64; i++) {
+        const Game *g = &g_games[i];
+        if (!g->installed || g->id < 0) continue;
+        int sv = 0, st = 0;
+        for (int k = 0; k < 2; k++) {
+            char path[300], md5[33];
+            if (!local_file_path(g, k, path, sizeof path)) continue;
+            if (file_md5(path, md5) < 0) continue;
+            SyncRec *r = rec_find(k, g->id);
+            if (!r || strcmp(r->md5, md5)) { if (k == K_SAVE) sv = 1; else st = 1; }
+        }
+        if (sv || st) {
+            snprintf(g_pend[n].name, sizeof g_pend[n].name, "%.60s", g->name);
+            snprintf(g_pend[n].what, sizeof g_pend[n].what, "%s",
+                     sv && st ? "save and state changed" : sv ? "save changed" : "state changed");
+            n++;
+        }
+    }
+    g_npend = n;
 }
 
 // ---- background jobs (download / sync) — one at a time, overlay shown while running
@@ -1654,7 +1792,7 @@ static void view_rebuild(void) {
     }
     if (g_cursor >= n) g_cursor = n ? n - 1 : 0;
     if (g_scroll > g_cursor) g_scroll = g_cursor;
-    if (g_cursor >= g_scroll + LIB_ROWS) g_scroll = g_cursor - LIB_ROWS + 1;
+    if (g_cursor >= g_scroll + lib_rows()) g_scroll = g_cursor - lib_rows() + 1;
 }
 
 static void fmt_size(uint32_t b, char *out, size_t sz) {
@@ -1667,8 +1805,11 @@ static void draw_library(void) {
     draw_frame_begin();
     vita2d_draw_rectangle(0, 0, 960, 544, COL_BG);
     if (g_logo) vita2d_draw_texture_scale(g_logo, 30, 8, 0.0859f, 0.0859f);
-    text(84, 50, COL_ACCENT, 1.6f, "SNES Library");
-    if (g_installed_only) text(340, 50, COL_GREEN, 1.2f, "[Installed only]");
+    char title[96];
+    snprintf(title, sizeof title, "%s", g_plat->name);
+    text(84, 50, COL_ACCENT, 1.6f, title);
+    if (g_installed_only) text(600, 50, COL_GREEN, 1.1f, "[Installed only]");
+    if (g_offline)        text(780, 50, COL_YELLOW, 1.1f, "[Offline]");
 
     char head[160];
     if (g_search[0]) snprintf(head, sizeof head, "Search: \"%s\"   %d shown", g_search, g_view_count);
@@ -1676,7 +1817,7 @@ static void draw_library(void) {
     text(40, 82, COL_DIM, 1.0f, head);
     if (g_lib_state == 1) text(700, 82, COL_YELLOW, 1.0f, g_from_cache ? "Updating..." : "Loading...");
 
-    for (int i = 0; i < LIB_ROWS; i++) {
+    for (int i = 0; i < lib_rows(); i++) {
         int vi = g_scroll + i;
         if (vi >= g_view_count) break;
         const Game *g = &g_games[g_view[vi]];
@@ -1698,8 +1839,32 @@ static void draw_library(void) {
     if (g_lib_state == 3 && g_view_count > 0) text(40, 500, COL_RED, 1.0f, g_lib_msg);
     else if (g_lib_toast[0])                  text(40, 500, COL_YELLOW, 1.0f, g_lib_toast);
 
-    text(40, 528, COL_DIM, 1.0f,
-         "Cross: play   Square: search   Select: installed only   Triangle: sync saves   Circle: back");
+    if (g_offline) {
+        // saves and states that changed on the Vita and will sync once you are back online
+        vita2d_draw_rectangle(30, 356, 900, 134, COL_PANEL);
+        char ph[96];
+        snprintf(ph, sizeof ph, "Waiting to sync when you are online  (%d)", g_npend);
+        text(44, 380, COL_ACCENT, 1.1f, ph);
+        if (g_npend == 0) {
+            text(44, 412, COL_DIM, 1.0f, "Nothing waiting - your saves and states are up to date");
+        } else {
+            for (int i = 0; i < g_npend && i < 3; i++) {
+                char row[120];
+                snprintf(row, sizeof row, "%.60s", g_pend[i].name);
+                text(44, 410 + i * 26, COL_TEXT, 1.0f, row);
+                text(600, 410 + i * 26, COL_YELLOW, 1.0f, g_pend[i].what);
+            }
+            if (g_npend > 3) {
+                char more[40];
+                snprintf(more, sizeof more, "and %d more", g_npend - 3);
+                text(44, 410 + 3 * 26, COL_DIM, 1.0f, more);
+            }
+        }
+        text(40, 528, COL_DIM, 1.0f, "Cross: play   Square: search   Select: show cached games   Circle: back");
+    } else {
+        text(40, 528, COL_DIM, 1.0f,
+             "Cross: play   Square: search   Select: installed only   Triangle: sync saves   Circle: back");
+    }
 
     if (g_popup[0]) {
         vita2d_draw_rectangle(0, 0, 960, 544, RGBA8(0, 0, 0, 170));
@@ -1756,7 +1921,7 @@ static void cursor_move(int delta) {
     if (g_cursor < 0) g_cursor = 0;
     if (g_cursor >= count) g_cursor = count - 1;
     if (g_cursor < g_scroll) g_scroll = g_cursor;
-    if (g_cursor >= g_scroll + LIB_ROWS) g_scroll = g_cursor - LIB_ROWS + 1;
+    if (g_cursor >= g_scroll + lib_rows()) g_scroll = g_cursor - lib_rows() + 1;
 }
 
 // Core for a game: the one matching its local state if we can tell, else our default.
@@ -1821,12 +1986,12 @@ static int library_input(void) {
         g_lib_toast_pending[0] = 0;
     }
     // refresh the list in the background every 10 minutes
-    if (!g_lib_busy && g_lib_state != 1 &&
+    if (!g_offline && !g_lib_busy && g_lib_state != 1 &&
         sceKernelGetProcessTimeWide() - g_last_refresh > 600ULL * 1000000ULL)
         library_load();
 
     // once the list is on screen (cache or live), push any saves changed since last session
-    if (!g_auto_synced && (g_lib_state == 2 || g_from_cache)) {
+    if (!g_offline && !g_auto_synced && (g_lib_state == 2 || g_from_cache)) {
         g_auto_synced = 1;
         int any = 0;
         for (int i = 0; i < g_game_count; i++) if (g_games[i].installed) { any = 1; break; }
@@ -1839,8 +2004,8 @@ static int library_input(void) {
     g_hold_down = (g_pad.buttons & SCE_CTRL_DOWN) ? g_hold_down + 1 : 0;
     if (g_hold_up == 1   || (g_hold_up > 15   && g_hold_up % 3 == 0))   cursor_move(-1);
     if (g_hold_down == 1 || (g_hold_down > 15 && g_hold_down % 3 == 0)) cursor_move(1);
-    if (pressed(SCE_CTRL_LEFT)  || pressed(SCE_CTRL_LTRIGGER)) cursor_move(-LIB_ROWS);
-    if (pressed(SCE_CTRL_RIGHT) || pressed(SCE_CTRL_RTRIGGER)) cursor_move(LIB_ROWS);
+    if (pressed(SCE_CTRL_LEFT)  || pressed(SCE_CTRL_LTRIGGER)) cursor_move(-lib_rows());
+    if (pressed(SCE_CTRL_RIGHT) || pressed(SCE_CTRL_RTRIGGER)) cursor_move(lib_rows());
 
     if (pressed(SCE_CTRL_SELECT)) {
         g_installed_only = !g_installed_only;
@@ -1851,7 +2016,9 @@ static int library_input(void) {
     if (pressed(SCE_CTRL_SQUARE)) {
         char tmp[64];
         snprintf(tmp, sizeof tmp, "%s", g_search);
-        if (ime_prompt("Search SNES games (empty = all)", tmp, sizeof tmp, 60)) {
+        char ptitle[64];
+        snprintf(ptitle, sizeof ptitle, "Search %s games (empty = all)", g_plat->name);
+        if (ime_prompt(ptitle, tmp, sizeof tmp, 60)) {
             snprintf(g_search, sizeof g_search, "%s", tmp);
             g_cursor = g_scroll = 0;
             g_view_dirty = 1;
@@ -1859,22 +2026,140 @@ static int library_input(void) {
     }
     if (pressed(SCE_CTRL_TRIANGLE)) {
         g_lib_toast[0] = 0;
-        job_start(JOB_SYNC_ALL, -1);
-        return 0;
+        if (g_offline) {
+            snprintf(g_lib_toast, sizeof g_lib_toast, "Offline - saves will sync when you reconnect");
+        } else {
+            job_start(JOB_SYNC_ALL, -1);
+            return 0;
+        }
     }
     if (pressed(SCE_CTRL_CROSS) && g_view_count > 0 && g_cursor < g_view_count) {
         g_lib_toast[0] = 0;
         int gi = g_view[g_cursor];
         Game *g = &g_games[gi];
         if (!g->installed) {
-            job_start(JOB_DOWNLOAD, gi);
-        } else if (g_skip_sync_id == g->id) {
+            if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Not downloaded - connect to RomM to download it");
+            else           job_start(JOB_DOWNLOAD, gi);
+        } else if (g_offline || g->id < 0 || g_skip_sync_id == g->id) {
             g_skip_sync_id = -1;
             g_job_index = gi;
             local_rom_path(g, g_job_rom, sizeof g_job_rom);
             do_launch();
         } else {
             job_start(JOB_SYNC_LAUNCH, gi);
+        }
+    }
+    return 0;
+}
+
+// ---- platform manager
+
+static int g_pm_sel = 0;
+static volatile int g_pm_busy = 0;
+static int g_pm_local[16];            // downloaded games per platform
+static char g_pm_toast[160] = "";
+static int g_pm_hold_up = 0, g_pm_hold_down = 0;
+
+static int count_dir(const char *dir) {
+    char path[160];
+    snprintf(path, sizeof path, "%s/roms/%s", DATA_DIR, dir);
+    int n = 0;
+    SceUID d = sceIoDopen(path);
+    if (d < 0) return 0;
+    SceIoDirent e;
+    memset(&e, 0, sizeof e);
+    while (sceIoDread(d, &e) > 0) {
+        size_t l = strlen(e.d_name);
+        if (!SCE_S_ISDIR(e.d_stat.st_mode) && !(l > 5 && !strcmp(e.d_name + l - 5, ".part"))) n++;
+        memset(&e, 0, sizeof e);
+    }
+    sceIoDclose(d);
+    return n;
+}
+
+static int pm_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
+    char err[160] = "";
+    platforms_refresh(err, sizeof err);
+    g_pm_busy = 0;
+    return sceKernelExitDeleteThread(0);
+}
+
+// called whenever the platform list is shown
+static void pm_enter(void) {
+    for (int i = 0; i < NPLATS && i < 16; i++) g_pm_local[i] = count_dir(g_plats[i].dir);
+    g_lib_cancel = 1;                  // stop loading the platform we just left
+    g_pm_toast[0] = 0;
+    if (!g_offline && !g_pm_busy) {
+        g_pm_busy = 1;
+        SceUID t = sceKernelCreateThread("platforms", pm_thread, 0x40, 0x20000, 0, 0, NULL);
+        if (t >= 0) sceKernelStartThread(t, 0, NULL);
+        else g_pm_busy = 0;
+    }
+}
+
+static void platform_select(int i) {
+    g_plat = &g_plats[i];
+    snprintf(g_rom_dir, sizeof g_rom_dir, "%s/roms/%s", DATA_DIR, g_plat->dir);
+    snprintf(g_cache_path, sizeof g_cache_path, "%s/library_%s.cache", DATA_DIR, g_plat->dir);
+    g_game_count = 0;
+    g_game_total = 0;
+    g_lib_state = 0;
+    g_from_cache = 0;
+    g_search[0] = 0;
+    g_cursor = g_scroll = 0;
+    g_view_dirty = 1;
+    g_auto_synced = 0;
+    g_lib_msg[0] = 0;
+    g_lib_toast[0] = 0;
+    g_npend = 0;
+    g_installed_only = g_offline ? 1 : 0;
+    scan_installed();
+    library_load();
+}
+
+static void draw_platforms(void) {
+    draw_frame_begin();
+    vita2d_draw_rectangle(0, 0, 960, 544, COL_BG);
+    if (g_logo) vita2d_draw_texture_scale(g_logo, 30, 8, 0.0859f, 0.0859f);
+    text(84, 50, COL_ACCENT, 1.6f, "Platforms");
+    if (g_offline) text(780, 50, COL_YELLOW, 1.1f, "[Offline]");
+    else           text(780, 50, COL_GREEN, 1.1f, "[Connected]");
+    text(40, 82, COL_DIM, 1.0f, g_offline ? "Offline mode: downloaded games only" : "Choose a platform to open");
+
+    for (int i = 0; i < NPLATS; i++) {
+        int y = 96 + i * 36;
+        const Platform *pl = &g_plats[i];
+        vita2d_draw_rectangle(30, y, 900, 34, i == g_pm_sel ? COL_SEL : COL_PANEL);
+        text(44, y + 24, pl->impl ? COL_TEXT : COL_GRAY, 1.1f, pl->name);
+        char info[64];
+        if (!pl->impl)            snprintf(info, sizeof info, "Planned");
+        else if (g_offline)       snprintf(info, sizeof info, "%d downloaded", g_pm_local[i]);
+        else if (pl->count >= 0)  snprintf(info, sizeof info, "%d games, %d downloaded", pl->count, g_pm_local[i]);
+        else                      snprintf(info, sizeof info, "%d downloaded", g_pm_local[i]);
+        text(930 - 11 * (int)strlen(info), y + 24, pl->impl ? COL_ACCENT : COL_GRAY, 1.0f, info);
+    }
+    if (g_pm_toast[0]) text(40, 500, COL_YELLOW, 1.0f, g_pm_toast);
+    text(40, 528, COL_DIM, 1.0f, "Cross: open   Circle: back   Start: exit");
+    draw_frame_end();
+}
+
+// returns 1 to go back to the connect screen, 2 to open the selected platform
+static int platforms_input(void) {
+    g_pm_hold_up   = (g_pad.buttons & SCE_CTRL_UP)   ? g_pm_hold_up + 1   : 0;
+    g_pm_hold_down = (g_pad.buttons & SCE_CTRL_DOWN) ? g_pm_hold_down + 1 : 0;
+    if (g_pm_hold_up == 1   || (g_pm_hold_up > 15   && g_pm_hold_up % 4 == 0))   g_pm_sel = (g_pm_sel + NPLATS - 1) % NPLATS;
+    if (g_pm_hold_down == 1 || (g_pm_hold_down > 15 && g_pm_hold_down % 4 == 0)) g_pm_sel = (g_pm_sel + 1) % NPLATS;
+    if (pressed(SCE_CTRL_CIRCLE)) return 1;
+    if (pressed(SCE_CTRL_CROSS)) {
+        g_pm_toast[0] = 0;
+        if (!g_plats[g_pm_sel].impl) {
+            snprintf(g_pm_toast, sizeof g_pm_toast, "%s is planned but not supported yet", g_plats[g_pm_sel].name);
+        } else if (g_lib_busy) {
+            snprintf(g_pm_toast, sizeof g_pm_toast, "Finishing the previous load, try again in a moment");
+        } else {
+            platform_select(g_pm_sel);
+            return 2;
         }
     }
     return 0;
@@ -1917,9 +2202,18 @@ static void draw_ui(void) {
     draw_button(3, 345, g_status == ST_WORKING ? "Connecting..." : "Connect");
     draw_button(4, 630, "Forget token");
 
-    vita2d_draw_rectangle(60, 350, 840, 90, COL_PANEL);
-    text(80, 385, dot, 1.3f, g_msg);
-    text(80, 420, COL_DIM, 1.0f, g_token[0] ? "Saved token present" : "No token saved yet");
+    vita2d_draw_rectangle(60, 336, 840, 50, g_sel == 5 ? COL_SEL : COL_PANEL);
+    text(80, 370, COL_TEXT, 1.2f, "Offline mode  (play downloaded games, no login needed)");
+
+    vita2d_draw_rectangle(60, 400, 840, 90, COL_PANEL);
+    {
+        char l1[80], l2[80] = "";
+        snprintf(l1, sizeof l1, "%.66s", g_msg);
+        if (strlen(g_msg) > 66) snprintf(l2, sizeof l2, "%.66s", g_msg + 66);
+        text(80, 426, dot, 1.1f, l1);
+        if (l2[0]) text(80, 450, dot, 1.1f, l2);
+    }
+    text(80, 480, COL_DIM, 1.0f, g_token[0] ? "Saved token present" : "No token saved yet");
 
     text(60, 510, COL_DIM, 1.0f,
          "D-pad: select    Cross: edit / confirm    Start: exit");
@@ -1960,31 +2254,40 @@ int main(void) {
     // Auto-verify a previously saved token on launch.
     if (g_url[0] && g_token[0]) start_connect();
 
-    int screen = 0;  // 0 connect, 1 library
+    int screen = 0;  // 0 connect, 1 library, 2 platform manager
     for (;;) {
         g_old = g_pad;
         sceCtrlPeekBufferPositive(0, &g_pad, 1);
 
-        if (g_enter_library) {
+        if (g_enter_library) {                 // connected: choose a platform
             g_enter_library = 0;
-            screen = 1;
-            if (g_lib_state == 0 || g_lib_state == 3) g_auto_synced = 0;
-            library_load();
+            g_offline = 0;
+            screen = 2;
+            pm_enter();
         }
+        if (g_net_fail) { g_net_fail = 0; g_sel = 5; }   // server unreachable: point at offline mode
 
+        if (screen == 2) {
+            if (pressed(SCE_CTRL_START)) break;
+            int r = platforms_input();
+            if (r == 1) { screen = 0; g_offline = 0; }
+            else if (r == 2) screen = 1;
+            draw_platforms();
+            continue;
+        }
         if (screen == 1) {
             if (pressed(SCE_CTRL_START) && g_job_state != 1) break;
-            if (library_input()) screen = 0;
+            if (library_input()) { screen = 2; pm_enter(); }
             draw_library();
             continue;
         }
 
         if (pressed(SCE_CTRL_START)) break;
         if (pressed(SCE_CTRL_UP))
-            g_sel = (g_sel >= 2) ? 1 : (g_sel == 1 ? 0 : 3);
+            g_sel = (g_sel == 5) ? 3 : (g_sel >= 2) ? 1 : (g_sel == 1 ? 0 : 5);
         if (pressed(SCE_CTRL_DOWN))
-            g_sel = (g_sel == 0) ? 1 : (g_sel == 1 ? 3 : 0);
-        if (g_sel >= 2) {
+            g_sel = (g_sel == 0) ? 1 : (g_sel == 1) ? 3 : (g_sel >= 2 && g_sel <= 4) ? 5 : 0;
+        if (g_sel >= 2 && g_sel <= 4) {
             if (pressed(SCE_CTRL_LEFT))  g_sel = g_sel > 2 ? g_sel - 1 : 4;
             if (pressed(SCE_CTRL_RIGHT)) g_sel = g_sel < 4 ? g_sel + 1 : 2;
         }
@@ -1994,7 +2297,7 @@ int main(void) {
                 case 0:
                     if (ime_prompt("RomM server URL", g_url, sizeof g_url, 200)) {
                         g_token[0] = 0;  // new server => old token is meaningless
-                        g_platform_id = -1;
+                        for (int i = 0; i < NPLATS; i++) { g_plats[i].id = -1; g_plats[i].count = -1; }
                         g_lib_state = 0;
                         g_status = ST_IDLE; snprintf(g_msg, sizeof g_msg, "Not connected");
                     }
@@ -2013,6 +2316,11 @@ int main(void) {
                     g_lib_state = 0;
                     g_status = ST_IDLE;
                     snprintf(g_msg, sizeof g_msg, "Token forgotten");
+                    break;
+                case 5:                            // offline mode: no network, no login
+                    g_offline = 1;
+                    screen = 2;
+                    pm_enter();
                     break;
             }
         }
