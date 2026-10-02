@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Generates the app art (icon0, LiveArea bg/startup, in-app logo).
-Needs inkscape + ImageMagick. A PS Vita drawn like the RomM logo: a big, half
-cropped silhouette on lavender, split diagonally into two purples, with the
-peach/salmon face buttons."""
+Needs inkscape + ImageMagick. A PS Vita drawn like the RomM logo (cropped silhouette, diagonal
+split, peach/salmon buttons) in the navy/slate palette shared with Freegosy."""
 import subprocess, os
 
 OUT = os.path.dirname(os.path.abspath(__file__)) + "/.."
-LAV, LAV2, PURPLE, DARK, PEACH, SALMON = "#ede4f1", "#bda5cf", "#553f99", "#38286a", "#e5c7a7", "#e1a38e"
+LAV, LAV2, PURPLE, DARK, PEACH, SALMON = "#a9aed0", "#7c82a9", "#24405f", "#162b45", "#f1cfa6", "#eba08c"
+SCREEN = "#d6d9ec"
 
 # Vita front view in its own coordinates: flat top, rounded belly, kept compact.
-BODY = "M 150 112 H 380 C 425 112 452 140 452 190 C 452 270 425 352 350 352 H 202 C 128 352 100 270 100 190 C 100 140 128 112 150 112 Z"
-SCALE, TX, TY = 1.5, -232.0, -120.0     # right half of the Vita, bleeding off the left edge
+BODY = "M -300 112 H 380 C 425 112 452 140 452 190 C 452 270 425 352 350 352 H -300 Z"
+SCALE, TX, TY = 1.4, -187.0, -87.0     # 
 
 def to_art(x, y):   # canvas point -> Vita coordinates (for the diagonal split)
     return (x - TX) / SCALE, (y - TY) / SCALE
@@ -27,7 +27,7 @@ def tile(size_px):
       <rect x="-300" y="-300" width="1200" height="1200" fill="{PURPLE}"/>
       <polygon points="{d1[0]:.1f},{d1[1]:.1f} {d2[0]:.1f},{d2[1]:.1f} {d3[0]:.1f},{d3[1]:.1f}" fill="{DARK}"/>
     </g>
-    <rect x="142" y="148" width="200" height="152" rx="16" fill="{LAV}"/>
+    <rect x="152" y="165" width="190" height="125" rx="14" fill="{SCREEN}"/>
     <circle cx="395" cy="176" r="15" fill="{PEACH}"/><circle cx="368" cy="203" r="15" fill="{PEACH}"/>
     <circle cx="422" cy="203" r="15" fill="{SALMON}"/><circle cx="395" cy="230" r="15" fill="{SALMON}"/>
     <circle cx="395" cy="290" r="19" fill="{LAV2}"/>

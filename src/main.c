@@ -35,14 +35,14 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #define DATA_DIR    "ux0:data/RomMVita"
 #define CONFIG_PATH DATA_DIR "/config.txt"
 
-// RomM-inspired palette: purples from the logo, peach/salmon accents
-#define COL_BG     RGBA8(0x27, 0x1d, 0x4a, 255)
-#define COL_PANEL  RGBA8(0x38, 0x28, 0x6a, 255)
-#define COL_SEL    RGBA8(0x6e, 0x55, 0xbd, 255)
-#define COL_TEXT   RGBA8(0xed, 0xe4, 0xf1, 255)
-#define COL_DIM    RGBA8(0xbd, 0xa5, 0xcf, 255)
-#define COL_ACCENT RGBA8(0xe5, 0xc7, 0xa7, 255)
-#define COL_GRAY   RGBA8(0x8c, 0x82, 0xa8, 255)
+// Navy/slate palette (shared with Freegosy) with peach/salmon accents
+#define COL_BG     RGBA8(0x10, 0x1e, 0x33, 255)
+#define COL_PANEL  RGBA8(0x1b, 0x33, 0x50, 255)
+#define COL_SEL    RGBA8(0x3b, 0x62, 0x94, 255)
+#define COL_TEXT   RGBA8(0xe6, 0xe9, 0xf5, 255)
+#define COL_DIM    RGBA8(0x9a, 0xa1, 0xc4, 255)
+#define COL_ACCENT RGBA8(0xf1, 0xcf, 0xa6, 255)
+#define COL_GRAY   RGBA8(0x6d, 0x74, 0x94, 255)
 #define COL_YELLOW RGBA8(0xf0, 0xc8, 0x5a, 255)
 #define COL_GREEN  RGBA8(0x4d, 0xd0, 0x8a, 255)
 #define COL_RED    RGBA8(0xf0, 0x6e, 0x6e, 255)

@@ -3,7 +3,7 @@
 Supported systems: **SNES only** for now.
 
 ## v0.2.0
-- New purple theme based on the RomM logo, with the logo in the app, a LiveArea icon, background and startup image
+- New navy/slate theme (same palette as Freegosy) with a half-cropped Vita logo in the app, LiveArea icon, background and startup image
 - **SNES library**: browse, search (local and instant) and an "installed only" view (Select)
 - Library **cache** with background refresh, so it opens instantly
 - **Downloads** ROMs to `ux0:data/RomMVita/roms/snes/` with a progress bar
