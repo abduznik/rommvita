@@ -8,9 +8,9 @@ import subprocess, os
 OUT = os.path.dirname(os.path.abspath(__file__)) + "/.."
 LAV, LAV2, PURPLE, DARK, PEACH, SALMON = "#ede4f1", "#bda5cf", "#553f99", "#38286a", "#e5c7a7", "#e1a38e"
 
-# Vita front view in its own coordinates (460 wide box): flat top, rounded belly.
-BODY = "M 80 112 H 380 C 425 112 452 140 452 190 C 452 270 425 352 350 352 H 110 C 35 352 8 270 8 190 C 8 140 35 112 80 112 Z"
-SCALE, TX, TY = 1.5, -232.0, -120.0     # right half of the Vita, bleeding off the left edge
+# Vita front view in its own coordinates: flat top, rounded belly, kept compact.
+BODY = "M 140 128 H 385 C 428 128 452 152 452 195 C 452 262 428 338 355 338 H 170 C 100 338 70 262 70 195 C 70 152 96 128 140 128 Z"
+SCALE, TX, TY = 1.5, -232.0, -132.0     # right half of the Vita, bleeding off the left edge
 
 def to_art(x, y):   # canvas point -> Vita coordinates (for the diagonal split)
     return (x - TX) / SCALE, (y - TY) / SCALE
@@ -27,10 +27,10 @@ def tile(size_px):
       <rect x="-300" y="-300" width="1200" height="1200" fill="{PURPLE}"/>
       <polygon points="{d1[0]:.1f},{d1[1]:.1f} {d2[0]:.1f},{d2[1]:.1f} {d3[0]:.1f},{d3[1]:.1f}" fill="{DARK}"/>
     </g>
-    <rect x="118" y="146" width="224" height="168" rx="16" fill="{LAV}"/>
-    <circle cx="395" cy="176" r="15" fill="{PEACH}"/><circle cx="368" cy="203" r="15" fill="{PEACH}"/>
-    <circle cx="422" cy="203" r="15" fill="{SALMON}"/><circle cx="395" cy="230" r="15" fill="{SALMON}"/>
-    <circle cx="395" cy="290" r="19" fill="{LAV2}"/>
+    <rect x="128" y="158" width="214" height="132" rx="14" fill="{LAV}"/>
+    <circle cx="395" cy="178" r="15" fill="{PEACH}"/><circle cx="368" cy="205" r="15" fill="{PEACH}"/>
+    <circle cx="422" cy="205" r="15" fill="{SALMON}"/><circle cx="395" cy="232" r="15" fill="{SALMON}"/>
+    <circle cx="395" cy="292" r="19" fill="{LAV2}"/>
   </g>'''
 
 def svg_for(w, h):
