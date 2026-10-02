@@ -46,17 +46,25 @@ def svg_for(w, h):
   <svg x="{ox}" y="{oy}" width="{460*s}" height="{460*s}" viewBox="0 0 460 460">{tile(0)}</svg>
 </svg>'''
 
-def make(w, h, name, dest, ss=4):
+def bg_svg(w, h):
+    """Plain background for the LiveArea: navy, dark diagonal and a periwinkle band, no drawing."""
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+  <rect width="{w}" height="{h}" fill="{PURPLE}"/>
+  <polygon points="{w},0 {w},{h} 0,{h}" fill="{DARK}"/>
+  <rect x="{w*0.82}" width="{w*0.18}" height="{h}" fill="{LAV}"/>
+</svg>'''
+
+def make(w, h, name, dest, ss=4, plain=False):
     sp, big = f"/tmp/claude-1000/art/{name}.svg", f"/tmp/claude-1000/art/{name}_big.png"
     os.makedirs("/tmp/claude-1000/art", exist_ok=True)
-    open(sp, "w").write(svg_for(w, h))
+    open(sp, "w").write(bg_svg(w, h) if plain else svg_for(w, h))
     subprocess.run(["inkscape", sp, "-o", big, "-w", str(w * ss), "-h", str(h * ss)], check=True, capture_output=True)
     subprocess.run(["magick", big, "-filter", "Lanczos", "-resize", f"{w}x{h}!", "-background", LAV,
                     "-alpha", "remove", "-alpha", "off", "-colors", "256", "PNG8:" + dest], check=True)
 
 os.makedirs(f"{OUT}/sce_sys/livearea/contents", exist_ok=True)
 make(128, 128, "icon0", f"{OUT}/sce_sys/icon0.png")
-make(840, 500, "bg", f"{OUT}/sce_sys/livearea/contents/bg.png")
+make(840, 500, "bg", f"{OUT}/sce_sys/livearea/contents/bg.png", plain=True)
 make(280, 158, "startup", f"{OUT}/sce_sys/livearea/contents/startup.png")
 make(512, 512, "logo", f"{OUT}/assets/logo.png")
 print("ok")

@@ -2,7 +2,7 @@
 
 Supported systems: **SNES** and **Game Boy Advance (experimental)**. More are planned.
 
-## Unreleased (branch `gba-support`)
+## v0.3.0
 - **Platform manager:** after connecting you choose a platform. Only the systems we plan to support are listed;
   SNES and Game Boy Advance work, the rest are marked "Planned".
 - **Game Boy Advance (experimental):** library, downloads and RetroArch launch with gpSP (falls back to mGBA, then
@@ -10,6 +10,7 @@ Supported systems: **SNES** and **Game Boy Advance (experimental)**. More are pl
 - **Offline mode:** if the server cannot be reached, open the downloaded games without logging in again. A panel lists
   saves and states that changed on the Vita and will sync when you are back online.
 - Library caches are now kept per platform.
+- Plain navy LiveArea background, and the version number is shown on the connect screen.
 - Saves and states are uploaded as **new, timestamped versions** (`Game [2026-09-20_19-49-15].srm`) instead of
   overwriting the previous one, so RomM keeps a history. The file name carries only the date and time; the app marks
   its uploads with the tag `rommvita` in RomM's slot and emulator fields. Only the newest 10 versions per game are

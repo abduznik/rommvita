@@ -70,7 +70,7 @@ RomM Vita does not bundle an emulator; it launches the official RetroArch.
 3. **Open RetroArch once** and let it finish its first-run setup, then quit.
 
 ### 2. Install RomM Vita
-1. Download `RomMVita-v0.2.0.vpk` from the [Releases](../../releases) page.
+1. Download `RomMVita-v0.3.0.vpk` from the [Releases](../../releases) page.
 2. Copy it to the Vita and install it with VitaShell. It is an *unsafe* homebrew app (it needs access to RetroArch's
    folders), so VitaShell will ask you to confirm.
 

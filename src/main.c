@@ -34,6 +34,7 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #include <curl/curl.h>
 
 #define DATA_DIR    "ux0:data/RomMVita"
+#define APP_VERSION    "0.3.0"
 #define VITA_TAG       "rommvita"   // RomM slot / emulator value identifying uploads from this app (never in file names)
 #define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
 #define CONFIG_PATH DATA_DIR "/config.txt"
@@ -2275,6 +2276,7 @@ static void draw_ui(void) {
 
     text(60, 510, COL_DIM, 1.0f,
          "D-pad: select    Cross: edit / confirm    Start: exit");
+    text(820, 510, COL_GRAY, 1.0f, "v" APP_VERSION);
     draw_frame_end();
 }
 
