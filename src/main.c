@@ -1434,14 +1434,19 @@ static int remote_latest(int kind, int rom_id, RemoteSave *out, char *err, size_
     return 0;
 }
 
+#define VITA_TAG       "rommvita"   // slot name and filename tag identifying uploads from this app
+#define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
+
 static int push_file(int kind, int rom_id, const char *path, const char *upname, int overwrite,
                      RemoteSave *out, char *err, size_t errsz) {
     char url[300], auth[256];
     if (kind == K_STATE)
         snprintf(url, sizeof url, "%s/api/states?rom_id=%d&emulator=retroarch", g_url, rom_id);
     else
-        snprintf(url, sizeof url, "%s/api/saves?rom_id=%d&overwrite=%s", g_url, rom_id,
-                 overwrite ? "true" : "false");
+        // our own slot, so the version cap below only ever prunes saves this app made
+        snprintf(url, sizeof url,
+                 "%s/api/saves?rom_id=%d&overwrite=%s&slot=" VITA_TAG "&autocleanup=true&autocleanup_limit=%d",
+                 g_url, rom_id, overwrite ? "true" : "false", KEEP_VERSIONS);
     CURL *c = curl_easy_init();
     if (!c) { snprintf(err, errsz, "curl init failed"); return -1; }
     curl_mime *mime = curl_mime_init(c);
@@ -1502,6 +1507,52 @@ static int push_file(int kind, int rom_id, const char *path, const char *upname,
 }
 
 enum { SY_NONE, SY_PUSHED, SY_PULLED, SY_ERR, SY_INCOMPAT };
+
+// RomM's state upload has no cleanup option, so keep only the newest KEEP_VERSIONS states
+// that carry our "(vita)" tag. States from other tools are never touched.
+static void prune_states(int rom_id) {
+    char url[300], err[160] = "";
+    snprintf(url, sizeof url, "%s/api/states?rom_id=%d", g_url, rom_id);
+    Buf b = { .cap = 4 * 1024 * 1024 };
+    long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, sizeof err);
+    if (code != 200) { free(b.data); return; }
+    cJSON *root = cJSON_Parse(b.data);
+    free(b.data);
+    if (!root) return;
+    cJSON *arr = cJSON_IsArray(root) ? root : cJSON_GetObjectItem(root, "items");
+    struct { int id; char updated[48]; } mine[128];
+    int n = 0;
+    cJSON *it;
+    cJSON_ArrayForEach(it, arr) {
+        cJSON *id = cJSON_GetObjectItem(it, "id");
+        cJSON *fn = cJSON_GetObjectItem(it, "file_name");
+        cJSON *up = cJSON_GetObjectItem(it, "updated_at");
+        if (!cJSON_IsNumber(id) || !cJSON_IsString(fn) || !strstr(fn->valuestring, "(vita)")) continue;
+        if (n >= 128) break;
+        mine[n].id = id->valueint;
+        snprintf(mine[n].updated, sizeof mine[n].updated, "%s", cJSON_IsString(up) ? up->valuestring : "");
+        n++;
+    }
+    cJSON_Delete(root);
+    if (n <= KEEP_VERSIONS) return;
+    // oldest first
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+            if (strcmp(mine[j].updated, mine[i].updated) < 0) { typeof(mine[0]) t = mine[i]; mine[i] = mine[j]; mine[j] = t; }
+    char body[1024] = "{\"states\":[";
+    int drop = n - KEEP_VERSIONS;
+    for (int i = 0; i < drop; i++) {
+        char one[16];
+        snprintf(one, sizeof one, "%s%d", i ? "," : "", mine[i].id);
+        strncat(body, one, sizeof body - strlen(body) - 4);
+    }
+    strncat(body, "]}", sizeof body - strlen(body) - 1);
+    char durl[300];
+    snprintf(durl, sizeof durl, "%s/api/states/delete", g_url);
+    Buf r = {0};
+    http_request(durl, g_token, body, &r, NULL, 0, 10L, err, sizeof err);
+    free(r.data);
+}
 
 // Two-way sync of one game's save. Never destroys data: a pull first backs the
 // local file up to .bak, and a push on conflict keeps the older remote copy.
@@ -1598,7 +1649,7 @@ static int sync_one(const Game *g, int kind, char *msg, size_t msgsz) {
         SceDateTime now;
         memset(&now, 0, sizeof now);
         sceRtcGetCurrentClockLocalTime(&now);
-        snprintf(up, sizeof up, "%.150s [%04d-%02d-%02d_%02d-%02d-%02d]%s", noext,
+        snprintf(up, sizeof up, "%.140s [%04d-%02d-%02d_%02d-%02d-%02d] (vita)%s", noext,
                  now.year, now.month, now.day, now.hour, now.minute, now.second,
                  kind == K_STATE ? ".state" : ".srm");
         RemoteSave res;
@@ -1607,6 +1658,7 @@ static int sync_one(const Game *g, int kind, char *msg, size_t msgsz) {
             return SY_ERR;
         }
         rec_set(kind, g->id, md5, res.id, res.updated);
+        if (kind == K_STATE) prune_states(g->id);
         snprintf(msg, msgsz, conflict ? "Pushed %s as a new version (RomM had a newer one too)" : "Pushed %s as a new version", what);
         return SY_PUSHED;
     }

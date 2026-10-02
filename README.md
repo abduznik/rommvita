@@ -109,7 +109,8 @@ Quit) so it writes the save file, then open RomM Vita again to push it.
 - Before a game launches, the app pulls a newer save/state from RomM if there is one. The next time you open the app it
   pushes anything you changed.
 - Every push is uploaded as a **new version tagged with the date and time** (for example
-  `Game [2026-09-20_19-49-15].srm`), so RomM keeps a history and nothing is overwritten.
+  `Game [2026-09-20_19-49-15] (vita).srm`), so RomM keeps a history. The newest 10 versions per game are kept; only
+  this app's own versions are ever pruned, never saves or states from other tools.
 - A pull first backs up your local file to `.bak`. If both sides changed, your Vita's copy is pushed and RomM keeps its
   own as well - nothing is deleted.
 - **States only load in the core that made them.** The app checks each state's size against the cores it knows. If the

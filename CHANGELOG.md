@@ -11,7 +11,9 @@ Supported systems: **SNES** and **Game Boy Advance (experimental)**. More are pl
   saves and states that changed on the Vita and will sync when you are back online.
 - Library caches are now kept per platform.
 - Saves and states are uploaded as **new, timestamped versions** (`Game [2026-09-20_19-49-15].srm`) instead of
-  overwriting the previous one, so RomM keeps a history.
+  overwriting the previous one, so RomM keeps a history. Uploads carry a `(vita)` tag, saves go in their own
+  `rommvita` slot, and only the newest 10 versions per game are kept. Only this app's own versions are ever pruned;
+  saves and states from other tools are never touched.
 
 ## v0.2.0
 - New navy/slate theme (same palette as Freegosy) with a half-cropped Vita logo in the app, LiveArea icon, background and startup image
