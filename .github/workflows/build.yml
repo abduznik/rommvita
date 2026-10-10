@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/local/vitasdk
-          key: vitasdk-${{ runner.os }}-v2
+          key: vitasdk-${{ runner.os }}-v3
 
       - name: Install VitaSDK and libraries
         if: steps.sdk.outputs.cache-hit != 'true'
@@ -35,8 +35,7 @@ jobs:
           sudo -E /tmp/vdpm/bootstrap-vitasdk.sh
           sudo chown -R "$USER" /usr/local/vitasdk
           export PATH="$VITASDK/bin:$PATH"
-          vdpm refresh || true
-          vdpm install libvita2d curl openssl libpng libjpeg-turbo freetype zlib zstd
+          VDPM_NONINTERACTIVE=1 vdpm install libvita2d curl openssl libpng libjpeg-turbo freetype zlib zstd
 
       - name: Build VPK
         run: |
