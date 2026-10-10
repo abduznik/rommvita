@@ -154,6 +154,6 @@ PS Vita homebrew, PlayStation Vita RomM client, RomM app, ROM manager client, Re
 save state sync, self-hosted game library, VitaSDK, VPK.
 
 ## Roadmap
-- More platforms beyond SNES
+- Test and stabilise NES, GB/GBC and Genesis; more platforms (PS1, Master System, PC Engine, Neo Geo)
 - Cover art
 - Per-platform folders and core selection

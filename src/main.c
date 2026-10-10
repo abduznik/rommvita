@@ -34,7 +34,7 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #include <curl/curl.h>
 
 #define DATA_DIR    "ux0:data/RomMVita"
-#define APP_VERSION    "0.3.0"
+#define APP_VERSION    "0.4.0"
 #define VITA_TAG       "rommvita"   // RomM slot / emulator value identifying uploads from this app (never in file names)
 #define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
 #define CONFIG_PATH DATA_DIR "/config.txt"
@@ -667,10 +667,11 @@ static Platform g_plats[] = {
     { "Super Nintendo",            "snes",    "snes", 1, { "snes9x2010_libretro", "snes9x2005_plus_libretro",
                                                            "snes9x2005_libretro", "snes9x2002_libretro", "snes9x_libretro" }, -1, -1 },
     { "Game Boy Advance",          "gba",     "gba",  1, { "gpsp_libretro", "mgba_libretro", "vba_next_libretro" }, -1, -1 },
-    { "NES",                       "nes",     NULL,   0, { 0 }, -1, -1 },
-    { "Game Boy",                  "gb",      NULL,   0, { 0 }, -1, -1 },
-    { "Game Boy Color",            "gbc",     NULL,   0, { 0 }, -1, -1 },
-    { "Sega Genesis / Mega Drive", "genesis", NULL,   0, { 0 }, -1, -1 },
+    { "NES",                       "nes",     "nes",  1, { "fceumm_libretro", "nestopia_libretro" }, -1, -1 },
+    { "Game Boy",                  "gb",      "gb",   1, { "gambatte_libretro" }, -1, -1 },
+    { "Game Boy Color",            "gbc",     "gbc",  1, { "gambatte_libretro" }, -1, -1 },
+    { "Sega Genesis / Mega Drive", "genesis", "genesis-slash-megadrive", 1,
+                                                         { "genesis_plus_gx_libretro", "picodrive_libretro" }, -1, -1 },
     { "PlayStation",               "ps1",     NULL,   0, { 0 }, -1, -1 },
     { "Arcade",                    "arcade",  NULL,   0, { 0 }, -1, -1 },
     { "Neo Geo",                   "neogeo",  NULL,   0, { 0 }, -1, -1 },
@@ -1292,6 +1293,11 @@ static void core_sort_dir(const char *core, char *out, size_t sz) {
         { "gpsp_libretro",            "gpSP" },
         { "mgba_libretro",            "mGBA" },
         { "vba_next_libretro",        "VBA Next" },
+        { "fceumm_libretro",          "FCEUmm" },
+        { "nestopia_libretro",        "Nestopia" },
+        { "gambatte_libretro",        "Gambatte" },
+        { "genesis_plus_gx_libretro", "Genesis Plus GX" },
+        { "picodrive_libretro",       "PicoDrive" },
     };
     for (unsigned i = 0; i < sizeof map / sizeof *map; i++)
         if (!strcmp(core, map[i].core)) { snprintf(out, sz, "%s", map[i].dir); return; }

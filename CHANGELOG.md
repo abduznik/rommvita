@@ -1,6 +1,11 @@
 # Changelog
 
-Supported systems: **SNES** and **Game Boy Advance (experimental)**. More are planned.
+Supported systems: **SNES**, **Game Boy Advance**, and (experimental) **NES, Game Boy, Game Boy Color, Genesis**.
+
+## v0.4.0 (unreleased)
+- **New platforms (experimental, untested on hardware):** NES (fceumm, Nestopia), Game Boy and Game Boy Color
+  (Gambatte), Sega Genesis / Mega Drive (Genesis Plus GX, PicoDrive). Library, download, launch and save/state sync
+  reuse the existing per-platform flow. The Genesis RomM slug is `genesis-slash-megadrive`.
 
 ## v0.3.0
 - **Platform manager:** after connecting you choose a platform. Only the systems we plan to support are listed;
