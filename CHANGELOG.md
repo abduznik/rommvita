@@ -3,6 +3,11 @@
 Supported systems: **SNES**, **Game Boy Advance**, and (experimental) **NES, Game Boy, Game Boy Color, Genesis**.
 
 ## v0.4.0 (unreleased)
+- **Game detail screen** (Triangle): size, file, local path, the core that will be used, local save and state status
+  with last sync time. Add a game to the download queue, or delete the ROM from the Vita (saves are kept; asks twice).
+- **Download queue** (R): queue up to 32 games and download them one after another with progress; Circle cancels,
+  failed downloads stay queued. Saves are pulled after each game.
+- Controls: L now syncs saves (it used to page; use D-pad Left/Right), Triangle opens details.
 - **New platforms (experimental, untested on hardware):** NES (fceumm, Nestopia), Game Boy and Game Boy Color
   (Gambatte), Sega Genesis / Mega Drive (Genesis Plus GX, PicoDrive). Library, download, launch and save/state sync
   reuse the existing per-platform flow. The Genesis RomM slug is `genesis-slash-megadrive`.

@@ -1715,7 +1715,31 @@ static void pending_scan(void) {
 
 // ---- background jobs (download / sync) — one at a time, overlay shown while running
 
-enum { JOB_DOWNLOAD = 1, JOB_SYNC_LAUNCH, JOB_SYNC_ALL };
+enum { JOB_DOWNLOAD = 1, JOB_SYNC_LAUNCH, JOB_SYNC_ALL, JOB_QUEUE };
+
+// ---- download queue: games picked in the library, fetched one after another (copies, so a list refresh can't move them)
+#define MAX_QUEUE 32
+static Game g_queue[MAX_QUEUE];
+static int  g_nqueue = 0;
+
+static int queue_find(int id) {
+    for (int i = 0; i < g_nqueue; i++) if (g_queue[i].id == id) return i;
+    return -1;
+}
+static int queue_add(const Game *g) {
+    if (queue_find(g->id) >= 0 || g_nqueue >= MAX_QUEUE) return 0;
+    g_queue[g_nqueue++] = *g;
+    return 1;
+}
+static void queue_remove(int i) {
+    if (i < 0 || i >= g_nqueue) return;
+    memmove(&g_queue[i], &g_queue[i + 1], (size_t)(g_nqueue - i - 1) * sizeof g_queue[0]);
+    g_nqueue--;
+}
+static void installed_refresh(void) {
+    scan_installed();
+    for (int i = 0; i < g_game_count; i++) g_games[i].installed = is_installed(&g_games[i]);
+}
 
 static volatile int g_job_kind = 0;
 static volatile int g_job_state = 0;      // 0 idle, 1 running, 2 done, 3 failed
@@ -1729,7 +1753,38 @@ static int  g_skip_sync_id = -1;          // game whose sync failed; next play s
 static int job_thread(SceSize args, void *argp) {
     (void)args; (void)argp;
     char err[200] = "", msg[200] = "";
-    Game *g = &g_games[g_job_index];
+    Game *g = g_job_index >= 0 ? &g_games[g_job_index] : NULL;
+
+    if (g_job_kind == JOB_QUEUE) {
+        ensure_dirs();
+        int total = g_nqueue, tried = 0, ok = 0, failed = 0;
+        char first_err[160] = "";
+        for (int i = 0; i < g_nqueue && !g_job_cancel; ) {
+            Game q = g_queue[i];
+            snprintf(g_job_title, sizeof g_job_title, "Downloading queue  %d / %d", ++tried, total);
+            snprintf(g_job_detail, sizeof g_job_detail, "%.100s", q.name);
+            g_job_now = g_job_total = 0;
+            char url[700], enc[400], path[256];
+            url_encode(q.fs_name, enc, sizeof enc);
+            snprintf(url, sizeof url, "%s/api/roms/%d/content/%s", g_url, q.id, enc);
+            local_rom_path(&q, path, sizeof path);
+            if (is_installed(&q) || fetch_file(url, path, err, sizeof err) == 0) {
+                ok++;
+                installed_refresh();
+                sync_game(&q, msg, sizeof msg, NULL, NULL);
+                queue_remove(i);
+            } else if (!g_job_cancel) {          // failed games stay queued for another try
+                failed++;
+                if (!first_err[0]) snprintf(first_err, sizeof first_err, "%s", err);
+                i++;
+            }
+        }
+        if (g_job_cancel)  snprintf(g_job_msg, sizeof g_job_msg, "Queue stopped: %d downloaded, %d left", ok, g_nqueue);
+        else if (failed)   snprintf(g_job_msg, sizeof g_job_msg, "Queue: %d downloaded, %d failed (%s)", ok, failed, first_err);
+        else               snprintf(g_job_msg, sizeof g_job_msg, "Queue finished: %d downloaded", ok);
+        g_job_state = failed ? 3 : 2;
+        return sceKernelExitDeleteThread(0);
+    }
 
     if (g_job_kind == JOB_DOWNLOAD) {
         ensure_dirs();
@@ -1786,9 +1841,10 @@ static void job_start(int kind, int game_index) {
     g_job_now = g_job_total = 0;
     g_job_cancel = 0;
     g_job_msg[0] = g_job_detail[0] = 0;
-    const char *name = (kind != JOB_SYNC_ALL && game_index >= 0) ? g_games[game_index].name : "";
+    const char *name = (kind != JOB_SYNC_ALL && kind != JOB_QUEUE && game_index >= 0) ? g_games[game_index].name : "";
     if (kind == JOB_DOWNLOAD)         snprintf(g_job_title, sizeof g_job_title, "Downloading  %.80s", name);
     else if (kind == JOB_SYNC_LAUNCH) snprintf(g_job_title, sizeof g_job_title, "Syncing save  %.80s", name);
+    else if (kind == JOB_QUEUE)       snprintf(g_job_title, sizeof g_job_title, "Downloading queue");
     else                              snprintf(g_job_title, sizeof g_job_title, "Syncing all saves");
     g_job_state = 1;
     SceUID t = sceKernelCreateThread("job", job_thread, 0x40, 0x40000, 0, 0, NULL);
@@ -1865,6 +1921,83 @@ static void fmt_size(uint32_t b, char *out, size_t sz) {
     else                  snprintf(out, sz, "%u KB", (unsigned)(b / 1024));
 }
 
+// ---- game detail and queue screens
+static int g_detail_id = -1;        // rom id shown on the detail screen, -1 = closed
+static int g_queue_open = 0, g_qsel = 0, g_del_confirm = 0;
+static const char *core_for_game(const Game *g);
+
+static int find_game_index(int id) {
+    for (int i = 0; i < g_game_count; i++) if (g_games[i].id == id) return i;
+    return -1;
+}
+
+static void draw_toast_line(void) {
+    if (g_lib_toast[0]) text(40, 500, COL_YELLOW, 1.0f, g_lib_toast);
+}
+
+static void draw_detail(void) {
+    int gi = find_game_index(g_detail_id);
+    if (gi < 0) return;
+    const Game *g = &g_games[gi];
+    vita2d_draw_rectangle(0, 0, 960, 544, COL_BG);
+    vita2d_draw_rectangle(30, 20, 900, 60, COL_PANEL);
+    text(44, 62, COL_ACCENT, 1.5f, g->name);
+    char sz[24], line[300], p[300];
+    fmt_size(g->size, sz, sizeof sz);
+    int y = 118;
+    snprintf(line, sizeof line, "%s   -   %s", g_plat->name, sz);
+    text(44, y, COL_TEXT, 1.1f, line); y += 32;
+    snprintf(line, sizeof line, "File: %.80s", g->fs_name);
+    text(44, y, COL_DIM, 1.0f, line); y += 28;
+    snprintf(line, sizeof line, "RomM id: %d", g->id);
+    text(44, y, COL_DIM, 1.0f, line); y += 40;
+    if (g->installed) {
+        local_rom_path(g, p, sizeof p);
+        text(44, y, COL_GREEN, 1.1f, "Downloaded"); y += 28;
+        snprintf(line, sizeof line, "%.90s", p);
+        text(44, y, COL_DIM, 1.0f, line); y += 28;
+        snprintf(line, sizeof line, "Core: %s", core_for_game(g));
+        text(44, y, COL_DIM, 1.0f, line); y += 40;
+        for (int k = 0; k < 2; k++) {
+            int have = local_file_path(g, k, p, sizeof p);
+            const SyncRec *r = rec_find(k, g->id);
+            snprintf(line, sizeof line, "%s: %s%s%.40s", k == K_SAVE ? "Save " : "State",
+                     have ? "on this Vita" : "none yet",
+                     r ? "   -   last synced " : "", r ? r->updated : "");
+            text(44, y, have ? COL_TEXT : COL_GRAY, 1.0f, line); y += 28;
+        }
+    } else {
+        text(44, y, queue_find(g->id) >= 0 ? COL_YELLOW : COL_GRAY, 1.1f,
+             queue_find(g->id) >= 0 ? "Not downloaded - in the download queue" : "Not downloaded");
+    }
+    draw_toast_line();
+    text(40, 528, COL_DIM, 1.0f, g->installed
+         ? "Cross: play   Triangle: delete from Vita (keeps saves)   Circle: back"
+         : "Cross: download and play   Square: add / remove from queue   Circle: back");
+}
+
+static void draw_queue(void) {
+    vita2d_draw_rectangle(0, 0, 960, 544, COL_BG);
+    char head[64];
+    snprintf(head, sizeof head, "Download queue  (%d / %d)", g_nqueue, MAX_QUEUE);
+    text(40, 52, COL_ACCENT, 1.6f, head);
+    if (g_nqueue == 0)
+        text(44, 120, COL_DIM, 1.2f, "Empty - press Triangle on a game and Square to queue it");
+    for (int i = 0; i < g_nqueue && i < 11; i++) {
+        int row = g_qsel < 11 ? i : g_qsel - 10 + i;
+        if (row >= g_nqueue) break;
+        int y = 74 + i * 36;
+        vita2d_draw_rectangle(30, y, 900, 34, row == g_qsel ? COL_SEL : COL_PANEL);
+        char nm[80], sz[24];
+        snprintf(nm, sizeof nm, "%.76s", g_queue[row].name);
+        fmt_size(g_queue[row].size, sz, sizeof sz);
+        text(44, y + 24, COL_TEXT, 1.1f, nm);
+        text(800, y + 24, COL_DIM, 1.0f, sz);
+    }
+    draw_toast_line();
+    text(40, 528, COL_DIM, 1.0f, "Cross: start downloads   Square: remove   Triangle: clear all   Circle: back");
+}
+
 static void draw_library(void) {
     if (g_view_dirty || g_view_built != g_game_count) view_rebuild();
     draw_frame_begin();
@@ -1881,6 +2014,11 @@ static void draw_library(void) {
     else             snprintf(head, sizeof head, "%d shown of %d%s", g_view_count, g_game_count, g_from_cache && g_lib_state == 1 ? "  (cached)" : "");
     text(40, 82, COL_DIM, 1.0f, head);
     if (g_lib_state == 1) text(700, 82, COL_YELLOW, 1.0f, g_from_cache ? "Updating..." : "Loading...");
+    if (g_nqueue) {
+        char qs[32];
+        snprintf(qs, sizeof qs, "Queue: %d", g_nqueue);
+        text(560, 82, COL_ACCENT, 1.0f, qs);
+    }
 
     for (int i = 0; i < lib_rows(); i++) {
         int vi = g_scroll + i;
@@ -1925,11 +2063,14 @@ static void draw_library(void) {
                 text(44, 410 + 3 * 26, COL_DIM, 1.0f, more);
             }
         }
-        text(40, 528, COL_DIM, 1.0f, "Cross: play   Square: search   Select: show cached games   Circle: back");
+        text(40, 528, COL_DIM, 1.0f, "Cross: play   Square: search   Select: cached games   Triangle: info   Circle: back");
     } else {
         text(40, 528, COL_DIM, 1.0f,
-             "Cross: play   Square: search   Select: installed only   Triangle: sync saves   Circle: back");
+             "Cross: play   Square: search   Select: installed   Triangle: info   L: sync   R: queue   Circle: back");
     }
+
+    if (g_detail_id >= 0)  draw_detail();
+    else if (g_queue_open) draw_queue();
 
     if (g_popup[0]) {
         vita2d_draw_rectangle(0, 0, 960, 544, RGBA8(0, 0, 0, 170));
@@ -1961,7 +2102,7 @@ static void draw_library(void) {
     if (g_job_state == 1) {
         vita2d_draw_rectangle(130, 190, 700, 150, RGBA8(10, 11, 15, 245));
         text(150, 232, COL_TEXT, 1.1f, g_job_title);
-        if (g_job_kind == JOB_DOWNLOAD && g_job_total > 0) {
+        if ((g_job_kind == JOB_DOWNLOAD || g_job_kind == JOB_QUEUE) && g_job_total > 0) {
             vita2d_draw_rectangle(150, 258, 660, 22, COL_PANEL);
             double frac = g_job_now / g_job_total;
             if (frac > 1) frac = 1;
@@ -1969,6 +2110,7 @@ static void draw_library(void) {
             char pr[80];
             snprintf(pr, sizeof pr, "%.1f / %.1f MB", g_job_now / 1048576.0, g_job_total / 1048576.0);
             text(150, 308, COL_DIM, 1.0f, pr);
+            if (g_job_detail[0]) text(150, 330, COL_DIM, 1.0f, g_job_detail);
         } else if (g_job_detail[0]) {
             text(150, 270, COL_DIM, 1.0f, g_job_detail);
         }
@@ -2011,6 +2153,68 @@ static void do_launch(void) {
         snprintf(g_lib_toast, sizeof g_lib_toast, "%s", err);
 }
 
+// Cross on a game: download it, or sync and launch it
+static void activate_game(int gi) {
+    Game *g = &g_games[gi];
+    g_lib_toast[0] = 0;
+    if (!g->installed) {
+        if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Not downloaded - connect to RomM to download it");
+        else           job_start(JOB_DOWNLOAD, gi);
+    } else if (g_offline || g->id < 0 || g_skip_sync_id == g->id) {
+        g_skip_sync_id = -1;
+        g_job_index = gi;
+        local_rom_path(g, g_job_rom, sizeof g_job_rom);
+        do_launch();
+    } else {
+        job_start(JOB_SYNC_LAUNCH, gi);
+    }
+}
+
+static void detail_input(void) {
+    int gi = find_game_index(g_detail_id);
+    if (gi < 0 || pressed(SCE_CTRL_CIRCLE)) { g_detail_id = -1; g_del_confirm = 0; return; }
+    Game *g = &g_games[gi];
+    if (pressed(SCE_CTRL_CROSS)) {
+        g_detail_id = -1; g_del_confirm = 0;
+        activate_game(gi);
+    } else if (pressed(SCE_CTRL_SQUARE) && !g->installed) {
+        g_lib_toast[0] = 0;
+        int qi = queue_find(g->id);
+        if (qi >= 0) { queue_remove(qi); snprintf(g_lib_toast, sizeof g_lib_toast, "Removed from the queue"); }
+        else if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Offline - connect to RomM to queue downloads");
+        else if (queue_add(g)) snprintf(g_lib_toast, sizeof g_lib_toast, "Added to the queue (%d) - press R in the list to start", g_nqueue);
+        else snprintf(g_lib_toast, sizeof g_lib_toast, "Queue is full (%d)", MAX_QUEUE);
+    } else if (pressed(SCE_CTRL_TRIANGLE) && g->installed) {
+        if (!g_del_confirm) {
+            g_del_confirm = 1;
+            snprintf(g_lib_toast, sizeof g_lib_toast, "Press Triangle again to delete the ROM from the Vita (saves are kept)");
+        } else {
+            char p[256];
+            local_rom_path(g, p, sizeof p);
+            sceIoRemove(p);
+            installed_refresh();
+            g_view_dirty = 1;
+            g_del_confirm = 0;
+            g_detail_id = -1;
+            snprintf(g_lib_toast, sizeof g_lib_toast, "Deleted %.60s from the Vita", g->name);
+        }
+    }
+}
+
+static void queue_input(void) {
+    if (pressed(SCE_CTRL_CIRCLE)) { g_queue_open = 0; return; }
+    if (pressed(SCE_CTRL_UP) && g_qsel > 0) g_qsel--;
+    if (pressed(SCE_CTRL_DOWN) && g_qsel < g_nqueue - 1) g_qsel++;
+    if (pressed(SCE_CTRL_SQUARE)) queue_remove(g_qsel);
+    if (pressed(SCE_CTRL_TRIANGLE)) g_nqueue = 0;
+    if (g_qsel >= g_nqueue) g_qsel = g_nqueue ? g_nqueue - 1 : 0;
+    if (pressed(SCE_CTRL_CROSS) && g_nqueue > 0) {
+        g_lib_toast[0] = 0;
+        g_queue_open = 0;
+        job_start(JOB_QUEUE, -1);
+    }
+}
+
 // returns 1 when the user wants to go back to the connect screen
 static int library_input(void) {
     if (g_job_state == 1) {
@@ -2027,8 +2231,8 @@ static int library_input(void) {
     if (g_job_state == 2) {
         g_job_state = 0;
         g_view_dirty = 1;
-        int launch = (g_job_kind != JOB_SYNC_ALL);
-        if (g_job_kind == JOB_SYNC_ALL) snprintf(g_lib_toast, sizeof g_lib_toast, "%s", g_job_msg);
+        int launch = (g_job_kind != JOB_SYNC_ALL && g_job_kind != JOB_QUEUE);
+        if (!launch) snprintf(g_lib_toast, sizeof g_lib_toast, "%s", g_job_msg);
         if (g_popup_pending[0]) {
             snprintf(g_popup, sizeof g_popup, "%s", g_popup_pending);
             g_popup_pending[0] = 0;
@@ -2063,14 +2267,17 @@ static int library_input(void) {
         if (any) { job_start(JOB_SYNC_ALL, -1); return 0; }
     }
 
+    if (g_detail_id >= 0) { detail_input(); return 0; }
+    if (g_queue_open)     { queue_input();  return 0; }
+
     if (pressed(SCE_CTRL_CIRCLE)) return 1;
 
     g_hold_up   = (g_pad.buttons & SCE_CTRL_UP)   ? g_hold_up + 1   : 0;
     g_hold_down = (g_pad.buttons & SCE_CTRL_DOWN) ? g_hold_down + 1 : 0;
     if (g_hold_up == 1   || (g_hold_up > 15   && g_hold_up % 3 == 0))   cursor_move(-1);
     if (g_hold_down == 1 || (g_hold_down > 15 && g_hold_down % 3 == 0)) cursor_move(1);
-    if (pressed(SCE_CTRL_LEFT)  || pressed(SCE_CTRL_LTRIGGER)) cursor_move(-lib_rows());
-    if (pressed(SCE_CTRL_RIGHT) || pressed(SCE_CTRL_RTRIGGER)) cursor_move(lib_rows());
+    if (pressed(SCE_CTRL_LEFT))  cursor_move(-lib_rows());
+    if (pressed(SCE_CTRL_RIGHT)) cursor_move(lib_rows());
 
     if (pressed(SCE_CTRL_SELECT)) {
         g_installed_only = !g_installed_only;
@@ -2089,7 +2296,19 @@ static int library_input(void) {
             g_view_dirty = 1;
         }
     }
-    if (pressed(SCE_CTRL_TRIANGLE)) {
+    if (pressed(SCE_CTRL_TRIANGLE) && g_view_count > 0 && g_cursor < g_view_count) {
+        g_lib_toast[0] = 0;
+        g_del_confirm = 0;
+        g_detail_id = g_games[g_view[g_cursor]].id;
+        return 0;
+    }
+    if (pressed(SCE_CTRL_RTRIGGER)) {
+        g_lib_toast[0] = 0;
+        g_queue_open = 1;
+        g_qsel = 0;
+        return 0;
+    }
+    if (pressed(SCE_CTRL_LTRIGGER)) {
         g_lib_toast[0] = 0;
         if (g_offline) {
             snprintf(g_lib_toast, sizeof g_lib_toast, "Offline - saves will sync when you reconnect");
@@ -2098,22 +2317,8 @@ static int library_input(void) {
             return 0;
         }
     }
-    if (pressed(SCE_CTRL_CROSS) && g_view_count > 0 && g_cursor < g_view_count) {
-        g_lib_toast[0] = 0;
-        int gi = g_view[g_cursor];
-        Game *g = &g_games[gi];
-        if (!g->installed) {
-            if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Not downloaded - connect to RomM to download it");
-            else           job_start(JOB_DOWNLOAD, gi);
-        } else if (g_offline || g->id < 0 || g_skip_sync_id == g->id) {
-            g_skip_sync_id = -1;
-            g_job_index = gi;
-            local_rom_path(g, g_job_rom, sizeof g_job_rom);
-            do_launch();
-        } else {
-            job_start(JOB_SYNC_LAUNCH, gi);
-        }
-    }
+    if (pressed(SCE_CTRL_CROSS) && g_view_count > 0 && g_cursor < g_view_count)
+        activate_game(g_view[g_cursor]);
     return 0;
 }
 
@@ -2178,6 +2383,9 @@ static void platform_select(int i) {
     g_lib_msg[0] = 0;
     g_lib_toast[0] = 0;
     g_npend = 0;
+    g_nqueue = 0;
+    g_detail_id = -1;
+    g_queue_open = 0;
     g_installed_only = g_offline ? 1 : 0;
     scan_installed();
     library_load();

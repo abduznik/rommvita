@@ -94,13 +94,20 @@ RomM Vita does not bundle an emulator; it launches the official RetroArch.
 ## Using the library
 | Button | Action |
 |---|---|
-| D-pad / L / R | Move / page up and down |
+| D-pad Up / Down | Move |
+| D-pad Left / Right | Page up and down |
 | Cross | Play (downloads first if needed). Offline: launch a downloaded game |
 | Square | Search (empty = show all) |
 | Select | Toggle "installed only" |
-| Triangle | Sync saves and states now |
+| Triangle | Game details (size, file, core, save and state status; queue or delete the ROM) |
+| L | Sync saves and states now |
+| R | Download queue (Cross starts it, Square removes a game, Triangle clears it) |
 | Circle | Back to the platform list |
 | Start | Exit |
+
+On a game's detail screen, **Square** adds a not-yet-downloaded game to the queue. The queue downloads games one after
+another (Circle cancels, failed games stay queued) and holds up to 32 games for the current platform. Deleting a ROM
+from the detail screen never touches its saves or states.
 
 Opening RetroArch's own menu in a game: **L + R + Start + Select**. Quit RetroArch from its menu (Close Content or
 Quit) so it writes the save file, then open RomM Vita again to push it.
