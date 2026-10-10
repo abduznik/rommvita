@@ -30,13 +30,12 @@ int _newlib_heap_size_user = 48 * 1024 * 1024;
 #include <openssl/md5.h>
 #include "quirc/quirc.h"
 #include "cjson/cJSON.h"
+#include "core.h"
 #include <vita2d.h>
 #include <curl/curl.h>
 
 #define DATA_DIR    "ux0:data/RomMVita"
-#define APP_VERSION    "0.3.0"
-#define VITA_TAG       "rommvita"   // RomM slot / emulator value identifying uploads from this app (never in file names)
-#define KEEP_VERSIONS  10           // versions kept per game (saves: server-side, states: pruned by us)
+#define APP_VERSION    "0.4.0"
 #define CONFIG_PATH DATA_DIR "/config.txt"
 
 // Freegosy palette (sampled from its icon): navy, dark navy, periwinkle, peach, salmon
@@ -109,25 +108,6 @@ static size_t write_cb(void *p, size_t sz, size_t n, void *ud) {
     return add;
 }
 
-// Pull a string value out of a flat JSON object: "key": "value"
-static int json_str(const char *json, const char *key, char *out, size_t outsz) {
-    if (!json) return 0;
-    char pat[64];
-    snprintf(pat, sizeof pat, "\"%s\"", key);
-    const char *p = strstr(json, pat);
-    if (!p) return 0;
-    p += strlen(pat);
-    while (*p == ' ' || *p == ':' || *p == '\t' || *p == '\n') p++;
-    if (*p != '"') return 0;
-    p++;
-    size_t i = 0;
-    while (*p && *p != '"' && i + 1 < outsz) {
-        if (*p == '\\' && p[1]) p++;
-        out[i++] = *p++;
-    }
-    out[i] = 0;
-    return i > 0;
-}
 
 // Returns HTTP status (>0), or -1 on transport error (msg filled in err).
 // If eff is non-NULL it receives the final URL after redirects.
@@ -195,18 +175,7 @@ static void set_status(Status s, const char *fmt, ...) {
 
 // ---------------------------------------------------------------- url / code helpers
 
-static int has_scheme(const char *s) {
-    return !strncasecmp(s, "http://", 7) || !strncasecmp(s, "https://", 8);
-}
 
-// Copies "scheme://authority" out of a URL (drops any path/query).
-static void origin_of(const char *url, char *out, size_t outsz) {
-    const char *p = strstr(url, "://");
-    size_t n = p ? (size_t)(strcspn(p + 3, "/?#") + (p + 3 - url)) : strlen(url);
-    if (n >= outsz) n = outsz - 1;
-    memcpy(out, url, n);
-    out[n] = 0;
-}
 
 // Private-looking hosts (IPs, bare names, .local etc.) are tried over http first.
 static int host_is_local(const char *input) {
@@ -261,7 +230,7 @@ static int probe_base(const char *input, char *base, size_t basesz, char *err, s
     for (int i = 0; i < count; i++) {
         set_status(ST_WORKING, "Trying %s ...", cand[i]);
         char url[360], eff[360] = "";
-        snprintf(url, sizeof url, "%s/api/heartbeat", cand[i]);
+        api_heartbeat(url, sizeof url, cand[i]);
         Buf b = {0};
         char e[200] = "";
         long code = http_request(url, NULL, NULL, &b, eff, sizeof eff, 5L, e, sizeof e);
@@ -279,27 +248,10 @@ static int probe_base(const char *input, char *base, size_t basesz, char *err, s
     return 0;
 }
 
-// Normalises a pairing code (any case, with/without dash) to 8 uppercase
-// alphanumerics. Fills `dashed` as XXXX-XXXX. Returns 1 if valid.
-static int code_normalise(const char *in, char dashed[10], char plain[9]) {
-    int n = 0;
-    for (; *in; in++) {
-        if (isalnum((unsigned char)*in)) {
-            if (n >= 8) return 0;
-            plain[n++] = (char)toupper((unsigned char)*in);
-        } else if (*in != '-' && *in != ' ') {
-            return 0;
-        }
-    }
-    if (n != 8) return 0;
-    plain[8] = 0;
-    snprintf(dashed, 10, "%.4s-%.4s", plain, plain + 4);
-    return 1;
-}
 
 static int verify_token(const char *base, const char *token, char *err, size_t errsz) {
     char url[320];
-    snprintf(url, sizeof url, "%s/api/users/me", base);
+    api_users_me(url, sizeof url, base);
     Buf b = {0};
     long code = http_request(url, token, NULL, &b, NULL, 0, 10L, err, errsz);
     int ok = 0;
@@ -320,7 +272,7 @@ static int verify_token(const char *base, const char *token, char *err, size_t e
 static long exchange_code(const char *base, const char *code, char *token, size_t toksz,
                           char *err, size_t errsz) {
     char url[320], body[64];
-    snprintf(url, sizeof url, "%s/api/client-tokens/exchange", base);
+    api_token_exchange(url, sizeof url, base);
     snprintf(body, sizeof body, "{\"code\":\"%s\"}", code);
     Buf b = {0};
     long rc = http_request(url, NULL, body, &b, NULL, 0, 10L, err, errsz);
@@ -525,31 +477,6 @@ static void cam_close(int dev) {
     sceCameraClose(dev);
 }
 
-// Parses a RomM pairing payload: <scheme>://host[:port]/pair?code=XXXX-XXXX
-// (a bare code is accepted too). Returns 1 on success.
-static int parse_pair_payload(const char *s, char *url, size_t urlsz, char *code, size_t codesz) {
-    char d[10], p[9];
-    url[0] = 0;
-    if (has_scheme(s)) {
-        const char *c = strstr(s, "code=");
-        if (!c) return 0;
-        c += 5;
-        char tmp[32];
-        size_t n = strcspn(c, "&# ");
-        if (n >= sizeof tmp) return 0;
-        memcpy(tmp, c, n);
-        tmp[n] = 0;
-        if (!code_normalise(tmp, d, p)) return 0;
-        origin_of(s, url, urlsz);
-        snprintf(code, codesz, "%s", d);
-        return 1;
-    }
-    if (code_normalise(s, d, p)) {  // bare code
-        snprintf(code, codesz, "%s", d);
-        return 1;
-    }
-    return 0;
-}
 
 // Full-screen camera scanner. Returns 1 if a pairing QR was read.
 static int qr_scan(char *out_url, size_t urlsz, char *out_code, size_t codesz) {
@@ -647,37 +574,7 @@ static int pressed(unsigned btn) { return (g_pad.buttons & btn) && !(g_old.butto
 #define PAGE_SIZE 100
 #define ROM_DIR   g_rom_dir
 
-typedef struct {
-    int      id;
-    uint32_t size;
-    uint8_t  installed;
-    char     name[96];
-    char     fs_name[128];
-} Game;
 
-// ---- platforms (only the systems we plan to support; `impl` marks the working ones)
-typedef struct {
-    const char *name, *dir, *slug;   // display name, local folder, RomM slug (NULL = not confirmed yet)
-    int impl;                        // 1 = launch and sync implemented
-    const char *cores[6];            // RetroArch cores in preference order
-    int id, count;                   // RomM platform id and rom_count (-1 = unknown)
-} Platform;
-
-static Platform g_plats[] = {
-    { "Super Nintendo",            "snes",    "snes", 1, { "snes9x2010_libretro", "snes9x2005_plus_libretro",
-                                                           "snes9x2005_libretro", "snes9x2002_libretro", "snes9x_libretro" }, -1, -1 },
-    { "Game Boy Advance",          "gba",     "gba",  1, { "gpsp_libretro", "mgba_libretro", "vba_next_libretro" }, -1, -1 },
-    { "NES",                       "nes",     NULL,   0, { 0 }, -1, -1 },
-    { "Game Boy",                  "gb",      NULL,   0, { 0 }, -1, -1 },
-    { "Game Boy Color",            "gbc",     NULL,   0, { 0 }, -1, -1 },
-    { "Sega Genesis / Mega Drive", "genesis", NULL,   0, { 0 }, -1, -1 },
-    { "PlayStation",               "ps1",     NULL,   0, { 0 }, -1, -1 },
-    { "Arcade",                    "arcade",  NULL,   0, { 0 }, -1, -1 },
-    { "Neo Geo",                   "neogeo",  NULL,   0, { 0 }, -1, -1 },
-    { "Sega Master System",        "sms",     NULL,   0, { 0 }, -1, -1 },
-    { "TurboGrafx-16 / PC Engine", "pce",     NULL,   0, { 0 }, -1, -1 },
-};
-#define NPLATS ((int)(sizeof g_plats / sizeof g_plats[0]))
 static Platform *g_plat = &g_plats[0];
 static char g_rom_dir[96] = DATA_DIR "/roms/snes";
 static char g_cache_path[128] = DATA_DIR "/library_snes.cache";
@@ -704,23 +601,7 @@ static void ensure_dirs(void);
 static char g_search[64] = "";
 static int  g_cursor = 0, g_scroll = 0;
 
-static void url_encode(const char *in, char *out, size_t outsz) {
-    static const char *hex = "0123456789ABCDEF";
-    size_t n = 0;
-    for (; *in && n + 4 < outsz; in++) {
-        unsigned char c = (unsigned char)*in;
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out[n++] = c;
-        else { out[n++] = '%'; out[n++] = hex[c >> 4]; out[n++] = hex[c & 15]; }
-    }
-    out[n] = 0;
-}
 
-static void sanitize_filename(const char *in, char *out, size_t outsz) {
-    size_t n = 0;
-    for (; *in && n + 1 < outsz; in++)
-        out[n++] = (isalnum((unsigned char)*in) || *in == '.' || *in == '-' || *in == '_') ? *in : '_';
-    out[n] = 0;
-}
 
 static void local_rom_path(const Game *g, char *out, size_t outsz) {
     char fn[160];
@@ -736,7 +617,7 @@ static int file_exists(const char *path) {
 // Fills id / rom_count for every platform we know a slug for. Returns 0 on success.
 static int platforms_refresh(char *err, size_t errsz) {
     char url[320];
-    snprintf(url, sizeof url, "%s/api/platforms", g_url);
+    api_platforms(url, sizeof url, g_url);
     Buf b = { .cap = 4 * 1024 * 1024 };
     long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, errsz);
     int rc = -1;
@@ -913,9 +794,7 @@ static int library_thread(SceSize args, void *argp) {
     int direct = !had_cache, count = 0, offset = 0, total = 1, failed = 0;
     while (offset < total && count < MAX_GAMES && !g_lib_cancel) {
         char url[512];
-        snprintf(url, sizeof url,
-                 "%s/api/roms?platform_ids=%d&limit=%d&offset=%d&order_by=name&order_dir=asc",
-                 g_url, g_plat->id, PAGE_SIZE, offset);
+        api_roms_page(url, sizeof url, g_url, g_plat->id, PAGE_SIZE, offset);
         Buf b = { .cap = 16 * 1024 * 1024 };
         long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, sizeof err);
         if (code != 200) {
@@ -1074,7 +953,6 @@ static int fetch_file(const char *url, const char *dest, char *err, size_t errsz
 
 // ---- save sync (RetroArch .srm <-> RomM saves)
 
-enum { K_SAVE = 0, K_STATE = 1 };
 typedef struct { int kind; int rom_id; char md5[33]; int save_id; char updated[48]; } SyncRec;
 typedef struct { int found; int id; char updated[48]; char hash[64]; } RemoteSave;
 
@@ -1264,11 +1142,6 @@ static void load_retroarch_cfg(void) {
     fclose(f);
 }
 
-static void strip_ext(const char *name, char *out, size_t sz) {
-    snprintf(out, sz, "%s", name);
-    char *dot = strrchr(out, '.');
-    if (dot && strlen(dot) <= 6) *dot = 0;
-}
 
 // The platform's cores in preference order; the first one RetroArch has installed wins.
 // If RetroArch's folder can't be read (sandbox) we fall back to the first.
@@ -1281,32 +1154,7 @@ static const char *pick_core(void) {
     return g_plat->cores[0] ? g_plat->cores[0] : "snes9x2010_libretro";
 }
 
-// Folder name RetroArch uses when saves are sorted by core: the core's library name.
-static void core_sort_dir(const char *core, char *out, size_t sz) {
-    static const struct { const char *core, *dir; } map[] = {
-        { "snes9x2010_libretro",      "Snes9x 2010" },
-        { "snes9x2005_plus_libretro", "Snes9x 2005 Plus" },
-        { "snes9x2005_libretro",      "Snes9x 2005" },
-        { "snes9x2002_libretro",      "Snes9x 2002" },
-        { "snes9x_libretro",          "Snes9x" },
-        { "gpsp_libretro",            "gpSP" },
-        { "mgba_libretro",            "mGBA" },
-        { "vba_next_libretro",        "VBA Next" },
-    };
-    for (unsigned i = 0; i < sizeof map / sizeof *map; i++)
-        if (!strcmp(core, map[i].core)) { snprintf(out, sz, "%s", map[i].dir); return; }
-    snprintf(out, sz, "%s", core);
-}
 
-// Lowercase letters and digits only, so "Snes9x 2010", "snes9x2010_libretro" and "VBA Next" compare sensibly.
-static void norm_key(const char *in, char *out, size_t sz) {
-    size_t n = 0;
-    for (; *in && n + 1 < sz; in++)
-        if (isalnum((unsigned char)*in)) out[n++] = (char)tolower((unsigned char)*in);
-    out[n] = 0;
-    char *u = strstr(out, "libretro");
-    if (u && u != out) *u = 0;
-}
 
 // Looks for the sorted-by-core subfolder RetroArch made for this core. Returns 1 if found.
 static int find_core_subdir(const char *dir, const char *core, char *out, size_t sz) {
@@ -1389,7 +1237,7 @@ static void mkdirs_for(const char *path) {
 
 static int remote_latest(int kind, int rom_id, RemoteSave *out, char *err, size_t errsz) {
     char url[300];
-    snprintf(url, sizeof url, "%s/api/%s?rom_id=%d", g_url, kind == K_STATE ? "states" : "saves", rom_id);
+    api_assets_list(url, sizeof url, g_url, kind, rom_id);
     Buf b = { .cap = 4 * 1024 * 1024 };
     long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, errsz);
     memset(out, 0, sizeof *out);
@@ -1441,12 +1289,10 @@ static int push_file(int kind, int rom_id, const char *path, const char *upname,
                      RemoteSave *out, char *err, size_t errsz) {
     char url[300], auth[256];
     if (kind == K_STATE)
-        snprintf(url, sizeof url, "%s/api/states?rom_id=%d&emulator=" VITA_TAG, g_url, rom_id);
+        api_state_upload(url, sizeof url, g_url, rom_id);
     else
         // our own slot, so the version cap below only ever prunes saves this app made
-        snprintf(url, sizeof url,
-                 "%s/api/saves?rom_id=%d&overwrite=%s&slot=" VITA_TAG "&emulator=" VITA_TAG "&autocleanup=true&autocleanup_limit=%d",
-                 g_url, rom_id, overwrite ? "true" : "false", KEEP_VERSIONS);
+        api_save_upload(url, sizeof url, g_url, rom_id, overwrite);
     CURL *c = curl_easy_init();
     if (!c) { snprintf(err, errsz, "curl init failed"); return -1; }
     curl_mime *mime = curl_mime_init(c);
@@ -1512,7 +1358,7 @@ enum { SY_NONE, SY_PUSHED, SY_PULLED, SY_ERR, SY_INCOMPAT };
 // whose emulator field is our tag. States from other tools are never touched.
 static void prune_states(int rom_id) {
     char url[300], err[160] = "";
-    snprintf(url, sizeof url, "%s/api/states?rom_id=%d", g_url, rom_id);
+    api_assets_list(url, sizeof url, g_url, K_STATE, rom_id);
     Buf b = { .cap = 4 * 1024 * 1024 };
     long code = http_request(url, g_token, NULL, &b, NULL, 0, 10L, err, sizeof err);
     if (code != 200) { free(b.data); return; }
@@ -1548,7 +1394,7 @@ static void prune_states(int rom_id) {
     }
     strncat(body, "]}", sizeof body - strlen(body) - 1);
     char durl[300];
-    snprintf(durl, sizeof durl, "%s/api/states/delete", g_url);
+    api_states_delete(durl, sizeof durl, g_url);
     Buf r = {0};
     http_request(durl, g_token, body, &r, NULL, 0, 10L, err, sizeof err);
     free(r.data);
@@ -1599,7 +1445,7 @@ static int sync_one(const Game *g, int kind, char *msg, size_t msgsz) {
     if (action == SY_PULLED) {
         char url[300], bak[320], incoming[330];
         mkdirs_for(path);
-        snprintf(url, sizeof url, "%s/api/%s/%d/content", g_url, kind == K_STATE ? "states" : "saves", rs.id);
+        api_asset_content(url, sizeof url, g_url, kind, rs.id);
         snprintf(incoming, sizeof incoming, "%s.incoming", path);
         if (fetch_file(url, incoming, err, sizeof err) < 0) {
             snprintf(msg, msgsz, "%s download: %s", what, err);
@@ -1709,7 +1555,13 @@ static void pending_scan(void) {
 
 // ---- background jobs (download / sync) — one at a time, overlay shown while running
 
-enum { JOB_DOWNLOAD = 1, JOB_SYNC_LAUNCH, JOB_SYNC_ALL };
+enum { JOB_DOWNLOAD = 1, JOB_SYNC_LAUNCH, JOB_SYNC_ALL, JOB_QUEUE };
+
+// ---- download queue: games picked in the library, fetched one after another (copies, so a list refresh can't move them)
+static void installed_refresh(void) {
+    scan_installed();
+    for (int i = 0; i < g_game_count; i++) g_games[i].installed = is_installed(&g_games[i]);
+}
 
 static volatile int g_job_kind = 0;
 static volatile int g_job_state = 0;      // 0 idle, 1 running, 2 done, 3 failed
@@ -1723,13 +1575,42 @@ static int  g_skip_sync_id = -1;          // game whose sync failed; next play s
 static int job_thread(SceSize args, void *argp) {
     (void)args; (void)argp;
     char err[200] = "", msg[200] = "";
-    Game *g = &g_games[g_job_index];
+    Game *g = g_job_index >= 0 ? &g_games[g_job_index] : NULL;
+
+    if (g_job_kind == JOB_QUEUE) {
+        ensure_dirs();
+        int total = g_nqueue, tried = 0, ok = 0, failed = 0;
+        char first_err[160] = "";
+        for (int i = 0; i < g_nqueue && !g_job_cancel; ) {
+            Game q = g_queue[i];
+            snprintf(g_job_title, sizeof g_job_title, "Downloading queue  %d / %d", ++tried, total);
+            snprintf(g_job_detail, sizeof g_job_detail, "%.100s", q.name);
+            g_job_now = g_job_total = 0;
+            char url[700], path[256];
+            api_rom_content(url, sizeof url, g_url, q.id, q.fs_name);
+            local_rom_path(&q, path, sizeof path);
+            if (is_installed(&q) || fetch_file(url, path, err, sizeof err) == 0) {
+                ok++;
+                installed_refresh();
+                sync_game(&q, msg, sizeof msg, NULL, NULL);
+                queue_remove(i);
+            } else if (!g_job_cancel) {          // failed games stay queued for another try
+                failed++;
+                if (!first_err[0]) snprintf(first_err, sizeof first_err, "%s", err);
+                i++;
+            }
+        }
+        if (g_job_cancel)  snprintf(g_job_msg, sizeof g_job_msg, "Queue stopped: %d downloaded, %d left", ok, g_nqueue);
+        else if (failed)   snprintf(g_job_msg, sizeof g_job_msg, "Queue: %d downloaded, %d failed (%s)", ok, failed, first_err);
+        else               snprintf(g_job_msg, sizeof g_job_msg, "Queue finished: %d downloaded", ok);
+        g_job_state = failed ? 3 : 2;
+        return sceKernelExitDeleteThread(0);
+    }
 
     if (g_job_kind == JOB_DOWNLOAD) {
         ensure_dirs();
-        char url[700], enc[400];
-        url_encode(g->fs_name, enc, sizeof enc);
-        snprintf(url, sizeof url, "%s/api/roms/%d/content/%s", g_url, g->id, enc);
+        char url[700];
+        api_rom_content(url, sizeof url, g_url, g->id, g->fs_name);
         local_rom_path(g, g_job_rom, sizeof g_job_rom);
         if (fetch_file(url, g_job_rom, err, sizeof err) < 0) {
             snprintf(g_job_msg, sizeof g_job_msg, "%s", err);
@@ -1780,9 +1661,10 @@ static void job_start(int kind, int game_index) {
     g_job_now = g_job_total = 0;
     g_job_cancel = 0;
     g_job_msg[0] = g_job_detail[0] = 0;
-    const char *name = (kind != JOB_SYNC_ALL && game_index >= 0) ? g_games[game_index].name : "";
+    const char *name = (kind != JOB_SYNC_ALL && kind != JOB_QUEUE && game_index >= 0) ? g_games[game_index].name : "";
     if (kind == JOB_DOWNLOAD)         snprintf(g_job_title, sizeof g_job_title, "Downloading  %.80s", name);
     else if (kind == JOB_SYNC_LAUNCH) snprintf(g_job_title, sizeof g_job_title, "Syncing save  %.80s", name);
+    else if (kind == JOB_QUEUE)       snprintf(g_job_title, sizeof g_job_title, "Downloading queue");
     else                              snprintf(g_job_title, sizeof g_job_title, "Syncing all saves");
     g_job_state = 1;
     SceUID t = sceKernelCreateThread("job", job_thread, 0x40, 0x40000, 0, 0, NULL);
@@ -1816,23 +1698,6 @@ static int  g_view[MAX_GAMES];
 static int  g_view_count = 0, g_view_built = -1, g_view_dirty = 1;
 static int  g_auto_synced = 0;
 
-// every space-separated word in `q` must appear in `name` (case-insensitive)
-static int name_matches(const char *name, const char *q) {
-    if (!q[0]) return 1;
-    char low[100], word[64];
-    size_t i = 0;
-    for (; name[i] && i < sizeof low - 1; i++) low[i] = (char)tolower((unsigned char)name[i]);
-    low[i] = 0;
-    const char *p = q;
-    while (*p) {
-        while (*p == ' ') p++;
-        size_t w = 0;
-        while (*p && *p != ' ' && w < sizeof word - 1) word[w++] = (char)tolower((unsigned char)*p++);
-        word[w] = 0;
-        if (w && !strstr(low, word)) return 0;
-    }
-    return 1;
-}
 
 static int g_cursor_id = -1;   // rom id under the cursor, so a refresh doesn't move it
 
@@ -1854,9 +1719,82 @@ static void view_rebuild(void) {
     if (g_cursor >= g_scroll + lib_rows()) g_scroll = g_cursor - lib_rows() + 1;
 }
 
-static void fmt_size(uint32_t b, char *out, size_t sz) {
-    if (b >= 1024 * 1024) snprintf(out, sz, "%.1f MB", b / 1048576.0);
-    else                  snprintf(out, sz, "%u KB", (unsigned)(b / 1024));
+
+// ---- game detail and queue screens
+static int g_detail_id = -1;        // rom id shown on the detail screen, -1 = closed
+static int g_queue_open = 0, g_qsel = 0, g_del_confirm = 0;
+static const char *core_for_game(const Game *g);
+
+static int find_game_index(int id) {
+    for (int i = 0; i < g_game_count; i++) if (g_games[i].id == id) return i;
+    return -1;
+}
+
+static void draw_toast_line(void) {
+    if (g_lib_toast[0]) text(40, 500, COL_YELLOW, 1.0f, g_lib_toast);
+}
+
+static void draw_detail(void) {
+    int gi = find_game_index(g_detail_id);
+    if (gi < 0) return;
+    const Game *g = &g_games[gi];
+    vita2d_draw_rectangle(0, 0, 960, 544, COL_BG);
+    vita2d_draw_rectangle(30, 20, 900, 60, COL_PANEL);
+    text(44, 62, COL_ACCENT, 1.5f, g->name);
+    char sz[24], line[300], p[300];
+    fmt_size(g->size, sz, sizeof sz);
+    int y = 118;
+    snprintf(line, sizeof line, "%s   -   %s", g_plat->name, sz);
+    text(44, y, COL_TEXT, 1.1f, line); y += 32;
+    snprintf(line, sizeof line, "File: %.80s", g->fs_name);
+    text(44, y, COL_DIM, 1.0f, line); y += 28;
+    snprintf(line, sizeof line, "RomM id: %d", g->id);
+    text(44, y, COL_DIM, 1.0f, line); y += 40;
+    if (g->installed) {
+        local_rom_path(g, p, sizeof p);
+        text(44, y, COL_GREEN, 1.1f, "Downloaded"); y += 28;
+        snprintf(line, sizeof line, "%.90s", p);
+        text(44, y, COL_DIM, 1.0f, line); y += 28;
+        snprintf(line, sizeof line, "Core: %s", core_for_game(g));
+        text(44, y, COL_DIM, 1.0f, line); y += 40;
+        for (int k = 0; k < 2; k++) {
+            int have = local_file_path(g, k, p, sizeof p);
+            const SyncRec *r = rec_find(k, g->id);
+            snprintf(line, sizeof line, "%s: %s%s%.40s", k == K_SAVE ? "Save " : "State",
+                     have ? "on this Vita" : "none yet",
+                     r ? "   -   last synced " : "", r ? r->updated : "");
+            text(44, y, have ? COL_TEXT : COL_GRAY, 1.0f, line); y += 28;
+        }
+    } else {
+        text(44, y, queue_find(g->id) >= 0 ? COL_YELLOW : COL_GRAY, 1.1f,
+             queue_find(g->id) >= 0 ? "Not downloaded - in the download queue" : "Not downloaded");
+    }
+    draw_toast_line();
+    text(40, 528, COL_DIM, 1.0f, g->installed
+         ? "Cross: play   Triangle: delete from Vita (keeps saves)   Circle: back"
+         : "Cross: download and play   Square: add / remove from queue   Circle: back");
+}
+
+static void draw_queue(void) {
+    vita2d_draw_rectangle(0, 0, 960, 544, COL_BG);
+    char head[64];
+    snprintf(head, sizeof head, "Download queue  (%d / %d)", g_nqueue, MAX_QUEUE);
+    text(40, 52, COL_ACCENT, 1.6f, head);
+    if (g_nqueue == 0)
+        text(44, 120, COL_DIM, 1.2f, "Empty - press Triangle on a game and Square to queue it");
+    for (int i = 0; i < g_nqueue && i < 11; i++) {
+        int row = g_qsel < 11 ? i : g_qsel - 10 + i;
+        if (row >= g_nqueue) break;
+        int y = 74 + i * 36;
+        vita2d_draw_rectangle(30, y, 900, 34, row == g_qsel ? COL_SEL : COL_PANEL);
+        char nm[80], sz[24];
+        snprintf(nm, sizeof nm, "%.76s", g_queue[row].name);
+        fmt_size(g_queue[row].size, sz, sizeof sz);
+        text(44, y + 24, COL_TEXT, 1.1f, nm);
+        text(800, y + 24, COL_DIM, 1.0f, sz);
+    }
+    draw_toast_line();
+    text(40, 528, COL_DIM, 1.0f, "Cross: start downloads   Square: remove   Triangle: clear all   Circle: back");
 }
 
 static void draw_library(void) {
@@ -1875,6 +1813,11 @@ static void draw_library(void) {
     else             snprintf(head, sizeof head, "%d shown of %d%s", g_view_count, g_game_count, g_from_cache && g_lib_state == 1 ? "  (cached)" : "");
     text(40, 82, COL_DIM, 1.0f, head);
     if (g_lib_state == 1) text(700, 82, COL_YELLOW, 1.0f, g_from_cache ? "Updating..." : "Loading...");
+    if (g_nqueue) {
+        char qs[32];
+        snprintf(qs, sizeof qs, "Queue: %d", g_nqueue);
+        text(560, 82, COL_ACCENT, 1.0f, qs);
+    }
 
     for (int i = 0; i < lib_rows(); i++) {
         int vi = g_scroll + i;
@@ -1919,11 +1862,14 @@ static void draw_library(void) {
                 text(44, 410 + 3 * 26, COL_DIM, 1.0f, more);
             }
         }
-        text(40, 528, COL_DIM, 1.0f, "Cross: play   Square: search   Select: show cached games   Circle: back");
+        text(40, 528, COL_DIM, 1.0f, "Cross: play   Square: search   Select: cached games   Triangle: info   Circle: back");
     } else {
         text(40, 528, COL_DIM, 1.0f,
-             "Cross: play   Square: search   Select: installed only   Triangle: sync saves   Circle: back");
+             "Cross: play   Square: search   Select: installed   Triangle: info   L: sync   R: queue   Circle: back");
     }
+
+    if (g_detail_id >= 0)  draw_detail();
+    else if (g_queue_open) draw_queue();
 
     if (g_popup[0]) {
         vita2d_draw_rectangle(0, 0, 960, 544, RGBA8(0, 0, 0, 170));
@@ -1955,7 +1901,7 @@ static void draw_library(void) {
     if (g_job_state == 1) {
         vita2d_draw_rectangle(130, 190, 700, 150, RGBA8(10, 11, 15, 245));
         text(150, 232, COL_TEXT, 1.1f, g_job_title);
-        if (g_job_kind == JOB_DOWNLOAD && g_job_total > 0) {
+        if ((g_job_kind == JOB_DOWNLOAD || g_job_kind == JOB_QUEUE) && g_job_total > 0) {
             vita2d_draw_rectangle(150, 258, 660, 22, COL_PANEL);
             double frac = g_job_now / g_job_total;
             if (frac > 1) frac = 1;
@@ -1963,6 +1909,7 @@ static void draw_library(void) {
             char pr[80];
             snprintf(pr, sizeof pr, "%.1f / %.1f MB", g_job_now / 1048576.0, g_job_total / 1048576.0);
             text(150, 308, COL_DIM, 1.0f, pr);
+            if (g_job_detail[0]) text(150, 330, COL_DIM, 1.0f, g_job_detail);
         } else if (g_job_detail[0]) {
             text(150, 270, COL_DIM, 1.0f, g_job_detail);
         }
@@ -2005,6 +1952,68 @@ static void do_launch(void) {
         snprintf(g_lib_toast, sizeof g_lib_toast, "%s", err);
 }
 
+// Cross on a game: download it, or sync and launch it
+static void activate_game(int gi) {
+    Game *g = &g_games[gi];
+    g_lib_toast[0] = 0;
+    if (!g->installed) {
+        if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Not downloaded - connect to RomM to download it");
+        else           job_start(JOB_DOWNLOAD, gi);
+    } else if (g_offline || g->id < 0 || g_skip_sync_id == g->id) {
+        g_skip_sync_id = -1;
+        g_job_index = gi;
+        local_rom_path(g, g_job_rom, sizeof g_job_rom);
+        do_launch();
+    } else {
+        job_start(JOB_SYNC_LAUNCH, gi);
+    }
+}
+
+static void detail_input(void) {
+    int gi = find_game_index(g_detail_id);
+    if (gi < 0 || pressed(SCE_CTRL_CIRCLE)) { g_detail_id = -1; g_del_confirm = 0; return; }
+    Game *g = &g_games[gi];
+    if (pressed(SCE_CTRL_CROSS)) {
+        g_detail_id = -1; g_del_confirm = 0;
+        activate_game(gi);
+    } else if (pressed(SCE_CTRL_SQUARE) && !g->installed) {
+        g_lib_toast[0] = 0;
+        int qi = queue_find(g->id);
+        if (qi >= 0) { queue_remove(qi); snprintf(g_lib_toast, sizeof g_lib_toast, "Removed from the queue"); }
+        else if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Offline - connect to RomM to queue downloads");
+        else if (queue_add(g)) snprintf(g_lib_toast, sizeof g_lib_toast, "Added to the queue (%d) - press R in the list to start", g_nqueue);
+        else snprintf(g_lib_toast, sizeof g_lib_toast, "Queue is full (%d)", MAX_QUEUE);
+    } else if (pressed(SCE_CTRL_TRIANGLE) && g->installed) {
+        if (!g_del_confirm) {
+            g_del_confirm = 1;
+            snprintf(g_lib_toast, sizeof g_lib_toast, "Press Triangle again to delete the ROM from the Vita (saves are kept)");
+        } else {
+            char p[256];
+            local_rom_path(g, p, sizeof p);
+            sceIoRemove(p);
+            installed_refresh();
+            g_view_dirty = 1;
+            g_del_confirm = 0;
+            g_detail_id = -1;
+            snprintf(g_lib_toast, sizeof g_lib_toast, "Deleted %.60s from the Vita", g->name);
+        }
+    }
+}
+
+static void queue_input(void) {
+    if (pressed(SCE_CTRL_CIRCLE)) { g_queue_open = 0; return; }
+    if (pressed(SCE_CTRL_UP) && g_qsel > 0) g_qsel--;
+    if (pressed(SCE_CTRL_DOWN) && g_qsel < g_nqueue - 1) g_qsel++;
+    if (pressed(SCE_CTRL_SQUARE)) queue_remove(g_qsel);
+    if (pressed(SCE_CTRL_TRIANGLE)) g_nqueue = 0;
+    if (g_qsel >= g_nqueue) g_qsel = g_nqueue ? g_nqueue - 1 : 0;
+    if (pressed(SCE_CTRL_CROSS) && g_nqueue > 0) {
+        g_lib_toast[0] = 0;
+        g_queue_open = 0;
+        job_start(JOB_QUEUE, -1);
+    }
+}
+
 // returns 1 when the user wants to go back to the connect screen
 static int library_input(void) {
     if (g_job_state == 1) {
@@ -2021,8 +2030,8 @@ static int library_input(void) {
     if (g_job_state == 2) {
         g_job_state = 0;
         g_view_dirty = 1;
-        int launch = (g_job_kind != JOB_SYNC_ALL);
-        if (g_job_kind == JOB_SYNC_ALL) snprintf(g_lib_toast, sizeof g_lib_toast, "%s", g_job_msg);
+        int launch = (g_job_kind != JOB_SYNC_ALL && g_job_kind != JOB_QUEUE);
+        if (!launch) snprintf(g_lib_toast, sizeof g_lib_toast, "%s", g_job_msg);
         if (g_popup_pending[0]) {
             snprintf(g_popup, sizeof g_popup, "%s", g_popup_pending);
             g_popup_pending[0] = 0;
@@ -2057,14 +2066,17 @@ static int library_input(void) {
         if (any) { job_start(JOB_SYNC_ALL, -1); return 0; }
     }
 
+    if (g_detail_id >= 0) { detail_input(); return 0; }
+    if (g_queue_open)     { queue_input();  return 0; }
+
     if (pressed(SCE_CTRL_CIRCLE)) return 1;
 
     g_hold_up   = (g_pad.buttons & SCE_CTRL_UP)   ? g_hold_up + 1   : 0;
     g_hold_down = (g_pad.buttons & SCE_CTRL_DOWN) ? g_hold_down + 1 : 0;
     if (g_hold_up == 1   || (g_hold_up > 15   && g_hold_up % 3 == 0))   cursor_move(-1);
     if (g_hold_down == 1 || (g_hold_down > 15 && g_hold_down % 3 == 0)) cursor_move(1);
-    if (pressed(SCE_CTRL_LEFT)  || pressed(SCE_CTRL_LTRIGGER)) cursor_move(-lib_rows());
-    if (pressed(SCE_CTRL_RIGHT) || pressed(SCE_CTRL_RTRIGGER)) cursor_move(lib_rows());
+    if (pressed(SCE_CTRL_LEFT))  cursor_move(-lib_rows());
+    if (pressed(SCE_CTRL_RIGHT)) cursor_move(lib_rows());
 
     if (pressed(SCE_CTRL_SELECT)) {
         g_installed_only = !g_installed_only;
@@ -2083,7 +2095,19 @@ static int library_input(void) {
             g_view_dirty = 1;
         }
     }
-    if (pressed(SCE_CTRL_TRIANGLE)) {
+    if (pressed(SCE_CTRL_TRIANGLE) && g_view_count > 0 && g_cursor < g_view_count) {
+        g_lib_toast[0] = 0;
+        g_del_confirm = 0;
+        g_detail_id = g_games[g_view[g_cursor]].id;
+        return 0;
+    }
+    if (pressed(SCE_CTRL_RTRIGGER)) {
+        g_lib_toast[0] = 0;
+        g_queue_open = 1;
+        g_qsel = 0;
+        return 0;
+    }
+    if (pressed(SCE_CTRL_LTRIGGER)) {
         g_lib_toast[0] = 0;
         if (g_offline) {
             snprintf(g_lib_toast, sizeof g_lib_toast, "Offline - saves will sync when you reconnect");
@@ -2092,22 +2116,8 @@ static int library_input(void) {
             return 0;
         }
     }
-    if (pressed(SCE_CTRL_CROSS) && g_view_count > 0 && g_cursor < g_view_count) {
-        g_lib_toast[0] = 0;
-        int gi = g_view[g_cursor];
-        Game *g = &g_games[gi];
-        if (!g->installed) {
-            if (g_offline) snprintf(g_lib_toast, sizeof g_lib_toast, "Not downloaded - connect to RomM to download it");
-            else           job_start(JOB_DOWNLOAD, gi);
-        } else if (g_offline || g->id < 0 || g_skip_sync_id == g->id) {
-            g_skip_sync_id = -1;
-            g_job_index = gi;
-            local_rom_path(g, g_job_rom, sizeof g_job_rom);
-            do_launch();
-        } else {
-            job_start(JOB_SYNC_LAUNCH, gi);
-        }
-    }
+    if (pressed(SCE_CTRL_CROSS) && g_view_count > 0 && g_cursor < g_view_count)
+        activate_game(g_view[g_cursor]);
     return 0;
 }
 
@@ -2172,6 +2182,9 @@ static void platform_select(int i) {
     g_lib_msg[0] = 0;
     g_lib_toast[0] = 0;
     g_npend = 0;
+    g_nqueue = 0;
+    g_detail_id = -1;
+    g_queue_open = 0;
     g_installed_only = g_offline ? 1 : 0;
     scan_installed();
     library_load();
