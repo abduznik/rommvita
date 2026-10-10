@@ -7,10 +7,12 @@ Supported systems: **SNES**, **Game Boy Advance**, and (experimental) **NES, Gam
   with last sync time. Add a game to the download queue, or delete the ROM from the Vita (saves are kept; asks twice).
 - **Download queue** (R): queue up to 32 games and download them one after another with progress; Circle cancels,
   failed downloads stay queued. Saves are pulled after each game.
+- Pure logic (URL building, parsing, queue, platform table) moved to `src/core.h`, with host-side unit and API-contract
+  regression tests in `tests/` (`make -C tests test`); every endpoint was cross-checked against RomM's backend source.
 - Controls: L now syncs saves (it used to page; use D-pad Left/Right), Triangle opens details.
 - **New platforms (experimental, untested on hardware):** NES (fceumm, Nestopia), Game Boy and Game Boy Color
   (Gambatte), Sega Genesis / Mega Drive (Genesis Plus GX, PicoDrive). Library, download, launch and save/state sync
-  reuse the existing per-platform flow. The Genesis RomM slug is `genesis-slash-megadrive`.
+  reuse the existing per-platform flow. The Genesis RomM slug is `genesis`.
 
 ## v0.3.0
 - **Platform manager:** after connecting you choose a platform. Only the systems we plan to support are listed;
