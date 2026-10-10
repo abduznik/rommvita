@@ -1,0 +1,66 @@
+name: build
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  vpk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VITASDK: /usr/local/vitasdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tests
+        run: make -C tests test SAN=1
+
+      - name: Cache VitaSDK
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/vitasdk
+          key: vitasdk-${{ runner.os }}-v1
+
+      - name: Install VitaSDK and libraries
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake git curl python3 xz-utils bzip2
+          git clone --depth 1 https://github.com/vitasdk/vdpm /tmp/vdpm
+          cd /tmp/vdpm
+          sudo -E ./bootstrap-vitasdk.sh
+          sudo -E ./install-all.sh
+          sudo chown -R "$USER" /usr/local/vitasdk
+
+      - name: Build VPK
+        run: |
+          export PATH="$VITASDK/bin:$PATH"
+          sudo apt-get install -y cmake
+          cmake -S . -B build
+          cmake --build build -j"$(nproc)"
+          ls -l build/rommvita.vpk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rommvita-vpk
+          path: build/rommvita.vpk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          cp build/rommvita.vpk "RomMVita-${TAG}.vpk"
+          FLAGS=""
+          case "$TAG" in *-*) FLAGS="--prerelease";; esac
+          # notes: the matching CHANGELOG section if there is one, else the newest
+          awk -v v="${VER%%-*}" '/^## /{p=index($0,"v" v)>0} p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Automated build of ${TAG}." > notes.md
+          gh release create "$TAG" "RomMVita-${TAG}.vpk" $FLAGS --title "$TAG" --notes-file notes.md
